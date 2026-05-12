@@ -506,7 +506,7 @@ async function overpassQuery(query, timeoutMs = 40000) {
       });
       if (!r.ok) {
         const errText = await r.text().catch(() => '');
-        console.error('[Overpass] HTTP', r.status, 'from', mirror, ':', errText.slice(0, 400));
+        console.error('[Overpass] HTTP', r.status, 'from', mirror, ':', errText.slice(0, 1000));
         lastErr = new Error(`HTTP ${r.status}`);
         continue;
       }
