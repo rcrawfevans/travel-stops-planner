@@ -627,8 +627,16 @@ async function prefetchRoutePOIs(stopEvents, overnights = []) {
   ];
 
   if (overnights.length) {
+    // Hotels are often mapped as ways (building footprints) — include both node and way
+    const lodgingParts = overnights.flatMap(e => {
+      const b = bbox([e.lng, e.lat]);
+      return [
+        `node["tourism"~"hotel|motel|guest_house"](${b})`,
+        `way["tourism"~"hotel|motel|guest_house"](${b})`,
+      ];
+    }).join(';');
     queries.push(
-      overpassQuery(buildQuery(overnights, `["tourism"~"^(hotel|motel|guest_house)$"]`, 25), 35000).catch(noErr)
+      overpassQuery(`[out:json][timeout:25];(${lodgingParts};);out center tags;`, 35000).catch(noErr)
     );
   }
 
@@ -645,7 +653,7 @@ async function prefetchRoutePOIs(stopEvents, overnights = []) {
 const _REST_NAME = /rest\s*area|rest\s*stop|welcome\s*cent|travel\s*plaza|service\s*area|information\s*cent/i;
 
 function findPOIFromCache(kind, cache, stopPt) {
-  const R = kind === 'meal' ? 30000 : 25000;
+  const R = kind === 'meal' ? 30000 : kind === 'break' ? 5000 : 25000;
 
   const restCenters = cache.rest.map(el => {
     const lt = el.lat ?? el.center?.lat;
