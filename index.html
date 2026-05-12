@@ -578,13 +578,19 @@ function gasPriority(el) {
   if (t.name)                return 2;
   return 3;
 }
+// Brands that make poor bathroom stops: drive-in/slow service/made-to-order.
+const SLOW_BREAK = /\bsonic\b|a\s*&\s*w|subway|chipotle|five\s*guys|jersey\s*mike|firehouse\s*sub|shake\s*shack|panera|raising\s*cane/i;
+
 function breakPriority(el) {
   const t = el.tags || {};
-  if (t.highway === 'rest_area')              return 0;
-  if (t.amenity === 'fast_food' && t.brand)  return 1;
-  if (t.amenity === 'fuel')                  return 2;
-  if (t.amenity === 'fast_food')             return 3;
-  return 4;
+  const nm = ((t.brand || '') + (t.name || '')).toLowerCase();
+  const isSlow = SLOW_BREAK.test(nm);
+  if (t.highway === 'rest_area' || t.highway === 'services') return 0;
+  if (t.amenity === 'fuel' && !isSlow)                       return 1;
+  if (t.amenity === 'fast_food' && !isSlow)                  return 2;
+  if (t.amenity === 'fuel' && isSlow)                        return 3; // e.g. Subway inside a TA
+  if (isSlow)                                                return 4; // last resort
+  return 3;
 }
 
 // ── POI: 3 Overpass queries covering the whole route, then local lookup ──────
@@ -1058,24 +1064,27 @@ async function generatePlan() {
       ));
     }
 
-    // Step 5c: Reverse-geocode overnight stops (staggered parallel)
+    // Step 5c: Reverse-geocode + find lodging for overnight stops
     const overnights = events.filter(e => e.type === 'overnight');
     overnights.forEach((e) => {
       const pt = pointAtDistance(route.geometry, e.distanceMeters);
       e.lat = pt[1]; e.lng = pt[0];
     });
+    if (overnights.length) showStatus('Finding lodging for overnight stops…');
     const offsetBase = needAddr.length;
     await Promise.all(overnights.map((e, i) =>
-      sleep((offsetBase + i) * 1100).then(() => reverseGeocode(e.lat, e.lng))
-        .then(addr => {
-          if (addr) {
-            const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
-            const cityState = parts.length >= 3 ? parts.slice(-4, -2).join(', ') : addr;
-            e.cityName = cityState;
-            e.label = `Lodging — End of Day ${e.day} (near ${cityState})`;
-          }
-        })
-        .catch(() => {})
+      sleep((offsetBase + i) * 1100).then(() => Promise.all([
+        reverseGeocode(e.lat, e.lng),
+        findLodging(e.lat, e.lng),
+      ])).then(([addr, lodging]) => {
+        if (addr) {
+          const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+          const cityState = parts.length >= 3 ? parts.slice(-4, -2).join(', ') : addr;
+          e.cityName = cityState;
+          e.label = `Lodging — End of Day ${e.day} (near ${cityState})`;
+        }
+        if (lodging) e.poi = lodging;
+      }).catch(() => {})
     ));
 
     // Render
@@ -1286,12 +1295,13 @@ function renderSchedule(events, info) {
 }
 
 async function findLodging(lat, lng) {
-  const SEARCH_RADIUS_M = 25000; // ~15 miles
-  const query = `[out:json][timeout:12];(
-    nwr["tourism"="hotel"](around:${SEARCH_RADIUS_M},${lat},${lng});
-    nwr["tourism"="motel"](around:${SEARCH_RADIUS_M},${lat},${lng});
-    nwr["tourism"="guest_house"](around:${SEARCH_RADIUS_M},${lat},${lng});
-    nwr["amenity"="hotel"](around:${SEARCH_RADIUS_M},${lat},${lng});
+  const R = 25000;
+  const ar = `(around:${R},${lat},${lng})`;
+  const query = `[out:json][timeout:20];(
+    node["tourism"~"^(hotel|motel|guest_house)$"]${ar};
+    way["tourism"~"^(hotel|motel|guest_house)$"]${ar};
+    node["amenity"="hotel"]${ar};
+    way["amenity"="hotel"]${ar};
   );out center tags 100;`;
   let data;
   try { data = await overpassQuery(query, 10000); } catch (e) { return null; }
