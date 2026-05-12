@@ -610,7 +610,7 @@ async function prefetchRoutePOIs(stopEvents) {
       const bbox = stopBBox([e.lng, e.lat]);
       return [`node${filter}(${bbox})`, `way${filter}(${bbox})`];
     }).join(';');
-    return `[out:json][timeout:${timeoutSec}];(${parts});out center tags;`;
+    return `[out:json][timeout:${timeoutSec}];(${parts};);out center tags;`;
   }
 
   const noErr = () => ({ elements: [] });
