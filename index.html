@@ -587,42 +587,31 @@ function breakPriority(el) {
 
 // ── POI: 3 Overpass queries covering the whole route, then local lookup ──────
 
-function _routeBBox(route, padDeg) {
-  const coords = route.geometry.coordinates;
-  let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-  for (const [lng, lat] of coords) {
-    if (lat < minLat) minLat = lat;
-    if (lat > maxLat) maxLat = lat;
-    if (lng < minLng) minLng = lng;
-    if (lng > maxLng) maxLng = lng;
-  }
-  return {
-    minLat: (minLat - padDeg).toFixed(4),
-    maxLat: (maxLat + padDeg).toFixed(4),
-    minLng: (minLng - padDeg).toFixed(4),
-    maxLng: (maxLng + padDeg).toFixed(4),
-  };
-}
 
 async function prefetchRoutePOIs(route) {
-  const { minLat, maxLat, minLng, maxLng } = _routeBBox(route, 0.3);
-  const bbox = `${minLat},${minLng},${maxLat},${maxLng}`;
-  const noErr = () => ({ elements: [] });
+  // Sample points every 80km along route; 50km radius per point ensures full coverage with overlap.
+  const STEP_M = 80000;
+  const R_M    = 50000;
+  const totalDist = route.distance;
 
+  const pts = [];
+  for (let d = 0; d <= totalDist; d += STEP_M) {
+    const [lng, lat] = pointAtDistance(route.geometry, d);
+    pts.push(`${lat.toFixed(4)},${lng.toFixed(4)}`);
+  }
+
+  function buildQuery(filters, timeoutSec) {
+    const fa = Array.isArray(filters) ? filters : [filters];
+    const parts = pts.flatMap(ll => fa.map(f => `nwr${f}(around:${R_M},${ll})`)).join(';');
+    return `[out:json][timeout:${timeoutSec}];(${parts});out center tags;`;
+  }
+
+  const noErr = () => ({ elements: [] });
   showStatus('Finding POIs along route…');
   const [foodData, fuelData, restData] = await Promise.all([
-    overpassQuery(
-      `[out:json][timeout:45][bbox:${bbox}];(nwr["amenity"~"^(restaurant|fast_food|cafe|pub)$"];);out center tags 500;`,
-      55000
-    ).catch(noErr),
-    overpassQuery(
-      `[out:json][timeout:45][bbox:${bbox}];(nwr["amenity"="fuel"];);out center tags 400;`,
-      55000
-    ).catch(noErr),
-    overpassQuery(
-      `[out:json][timeout:45][bbox:${bbox}];(nwr["highway"~"^(rest_area|services)$"];nwr["amenity"="rest_area"];);out center tags 100;`,
-      55000
-    ).catch(noErr),
+    overpassQuery(buildQuery(`["amenity"~"^(restaurant|fast_food|cafe|pub)$"]`, 45), 55000).catch(noErr),
+    overpassQuery(buildQuery(`["amenity"="fuel"]`, 45), 55000).catch(noErr),
+    overpassQuery(buildQuery([`["highway"~"^(rest_area|services)$"]`, `["amenity"="rest_area"]`], 45), 55000).catch(noErr),
   ]);
 
   return {
