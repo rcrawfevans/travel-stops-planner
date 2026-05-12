@@ -337,7 +337,6 @@ if (location.protocol === 'file:') {
 const NOMINATIM       = 'https://nominatim.openstreetmap.org';
 const OSRM            = 'https://router.project-osrm.org';
 const OVERPASS        = 'https://overpass-api.de/api/interpreter';
-const FOURSQUARE_KEY  = 'NUMDLANQZ5SJTH2VINJQ5BHRWXJE3JYUOD1NIB0UFTLFHUQ3';
 
 // ── Detour management ──────────────────────────────────────────────────────
 let detours = [];
@@ -483,23 +482,6 @@ const OVERPASS_MIRRORS = [
   'https://overpass.private.coffee/api/interpreter',
 ];
 
-// Limit concurrent Overpass requests to 2 to avoid 429 rate-limiting
-const _ovSemaphore = (() => {
-  const MAX = 2;
-  let running = 0;
-  const queue = [];
-  return function acquire(fn) {
-    return new Promise((resolve, reject) => {
-      const run = async () => {
-        running++;
-        try { resolve(await fn()); }
-        catch (e) { reject(e); }
-        finally { running--; if (queue.length) queue.shift()(); }
-      };
-      if (running < MAX) run(); else queue.push(run);
-    });
-  };
-})();
 
 async function fetchWithTimeout(url, timeoutMs, options = {}) {
   const ctrl = new AbortController();
@@ -511,33 +493,8 @@ async function fetchWithTimeout(url, timeoutMs, options = {}) {
   }
 }
 
-// Search Foursquare Places API (new places-api.foursquare.com endpoint) for food near a lat/lng.
-async function foursquareSearch(lat, lng, radiusM) {
-  const params = new URLSearchParams({
-    ll: `${lat.toFixed(6)},${lng.toFixed(6)}`,
-    radius: String(Math.min(Math.round(radiusM), 100000)),
-    query: 'restaurant food cafe diner',
-    limit: '50',
-    sort: 'DISTANCE',
-  });
-  const r = await fetchWithTimeout(
-    `https://places-api.foursquare.com/places/search?${params}`,
-    8000,
-    {
-      headers: {
-        'Authorization': `Bearer ${FOURSQUARE_KEY}`,
-        'X-Places-Api-Version': '2025-06-17',
-        'Accept': 'application/json',
-      },
-    }
-  );
-  if (!r.ok) throw new Error(`Foursquare ${r.status}`);
-  const data = await r.json();
-  return data.results || [];
-}
 
 async function overpassQuery(query, timeoutMs = 40000) {
-  return _ovSemaphore(async () => {
   let lastErr;
   for (const mirror of OVERPASS_MIRRORS) {
     try {
@@ -553,7 +510,6 @@ async function overpassQuery(query, timeoutMs = 40000) {
     }
   }
   throw lastErr || new Error('All Overpass mirrors failed');
-  }); // end semaphore
 }
 
 async function reverseGeocode(lat, lng) {
@@ -629,231 +585,132 @@ function breakPriority(el) {
   return 4;
 }
 
-async function findPOI(kind, route, distanceMeters) {
-  return _findPOIPass(kind, route, distanceMeters, true);
+// ── POI: 3 Overpass queries covering the whole route, then local lookup ──────
+
+function _routeBBox(route, padDeg) {
+  const coords = route.geometry.coordinates;
+  const lats = coords.map(c => c[1]);
+  const lngs = coords.map(c => c[0]);
+  return {
+    minLat: (Math.min(...lats) - padDeg).toFixed(4),
+    maxLat: (Math.max(...lats) + padDeg).toFixed(4),
+    minLng: (Math.min(...lngs) - padDeg).toFixed(4),
+    maxLng: (Math.max(...lngs) + padDeg).toFixed(4),
+  };
 }
 
-async function _findMealFoursquare(route, distanceMeters) {
-  const R = 20000; // 12-mile radius per search centre
-  // Two centres: at the scheduled stop, and 10 miles ahead
-  const offsets = [0, 16000];
-  const centres = offsets.map(o => {
-    const d = Math.max(0, Math.min(distanceMeters + o, route.distance));
-    const p = pointAtDistance(route.geometry, d);
-    return { lat: p[1], lng: p[0] };
-  });
+async function prefetchRoutePOIs(route) {
+  const { minLat, maxLat, minLng, maxLng } = _routeBBox(route, 0.3);
+  const bbox = `${minLat},${minLng},${maxLat},${maxLng}`;
+  const noErr = () => ({ elements: [] });
 
-  // Sample points for off-route distance filtering
-  const samplePoints = centres.map(c => [c.lng, c.lat]);
-  function nearestDist(lng, lat) {
-    let min = Infinity;
-    for (const p of samplePoints) {
-      const d = haversine([p[0], p[1]], [lng, lat]);
-      if (d < min) min = d;
-    }
-    return min;
-  }
+  showStatus('Finding restaurants along route…');
+  const foodData = await overpassQuery(
+    `[out:json][timeout:30][bbox:${bbox}];(nwr["amenity"~"^(restaurant|fast_food|cafe|pub)$"];);out center tags 500;`
+  ).catch(noErr);
 
-  // Run both centre searches in parallel
-  const searchResults = await Promise.allSettled(
-    centres.map(c => foursquareSearch(c.lat, c.lng, R))
-  );
+  showStatus('Finding gas stations along route…');
+  const fuelData = await overpassQuery(
+    `[out:json][timeout:30][bbox:${bbox}];(nwr["amenity"="fuel"];);out center tags 400;`
+  ).catch(noErr);
 
-  const seen = new Set();
-  const candidates = [];
-  for (const result of searchResults) {
-    if (result.status !== 'fulfilled') {
-      console.warn('Foursquare search error:', result.reason?.message);
-      continue;
-    }
-    for (const p of result.value) {
-      const id = p.fsq_place_id || p.fsq_id;
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      const lat = p.latitude ?? p.geocodes?.main?.latitude;
-      const lng = p.longitude ?? p.geocodes?.main?.longitude;
-      if (lat == null || lng == null) continue;
-      const dist = nearestDist(lng, lat);
-      if (dist > R) continue;
-      const catNames = (p.categories || []).map(c => c.name.toLowerCase()).join(' ');
-      if (/gas station|fuel|petroleum|convenience store/.test(catNames)) continue;
-      let priority = 2;
-      if (/fast food|burger|hot dog/.test(catNames)) priority = 3;
-      else if (/café|cafe|coffee/.test(catNames)) priority = 2;
-      else if (/restaurant|diner|bistro|grill|sushi|pizza|mexican|chinese|thai|indian/.test(catNames)) priority = 1;
-      const loc = p.location || {};
-      candidates.push({
-        priority, dist, lat, lng,
-        name: p.name || 'Restaurant',
-        brand: null,
-        type: p.categories?.[0]?.name || 'restaurant',
-        address: [loc.address, loc.locality || loc.city, loc.region || loc.state, loc.postcode].filter(Boolean).join(', ') || null,
-        distFromRoute: Math.round(dist),
-      });
-    }
-  }
-  candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
-  return candidates.slice(0, 8);
+  showStatus('Finding rest areas along route…');
+  const restData = await overpassQuery(
+    `[out:json][timeout:30][bbox:${bbox}];(nwr["highway"~"^(rest_area|services)$"];nwr["amenity"="rest_area"];);out center tags 100;`
+  ).catch(noErr);
+
+  return {
+    food: foodData.elements || [],
+    fuel: fuelData.elements || [],
+    rest: restData.elements || [],
+  };
 }
 
-async function _findPOIPass(kind, route, distanceMeters, wide) {
-  // Search radius per circle and how far ahead along the route to place circles.
-  // Meals use larger radii since restaurants can be several miles off the highway.
-  // We place circles at the stop point AND ahead so drivers can plan to stop at
-  // the next real option even if it's past the scheduled minute.
-  const R = wide
-    ? (kind === 'meal' ? 20000 : 12000)   // wide fallback: ~12 mi meals, ~7 mi gas/break
-    : (kind === 'meal' ? 14000 :  8000);  // primary: ~9 mi meals, ~5 mi gas/break
+const _REST_NAME = /rest\s*area|rest\s*stop|welcome\s*cent|travel\s*plaza|service\s*area|information\s*cent/i;
 
-  // Circle centres: stop point, +12 mi, +20 mi (and −8 mi for good measure)
-  const offsets = [-13000, 0, 19000, 32000];
-  const centres = offsets.map(o => {
-    const d = Math.max(0, Math.min(distanceMeters + o, route.distance));
-    const p = pointAtDistance(route.geometry, d);
-    return { lat: p[1], lng: p[0], d };
-  });
+function findPOIFromCache(kind, cache, stopPt) {
+  const R = kind === 'meal' ? 25000 : 15000;
 
-  // Sample points (for post-query off-route distance check)
-  const samplePoints = centres.map(c => [c.lng, c.lat]);
+  const restCenters = cache.rest.map(el => {
+    const lt = el.lat ?? el.center?.lat;
+    const ln = el.lon ?? el.center?.lon;
+    return lt != null ? [ln, lt] : null;
+  }).filter(Boolean);
 
-  function nearestRouteDist(lng, lat) {
-    let min = Infinity;
-    for (const p of samplePoints) {
-      const d = haversine([p[0], p[1]], [lng, lat]);
-      if (d < min) min = d;
-    }
-    return min;
+  function elDist(el) {
+    const lt = el.lat ?? el.center?.lat;
+    const ln = el.lon ?? el.center?.lon;
+    return (lt == null) ? Infinity : haversine([stopPt[0], stopPt[1]], [ln, lt]);
   }
 
-  // Build union of circular queries — one circle per centre point.
-  // This keeps result counts manageable in cities (no wide corridor).
-  function circles(tag) {
-    return centres.map(c => `nwr${tag}(around:${R},${c.lat.toFixed(5)},${c.lng.toFixed(5)});`).join('');
+  function toResult(el, fallbackName, fallbackType) {
+    return {
+      name: el.tags?.name || el.tags?.brand || fallbackName,
+      brand: el.tags?.brand || null,
+      type: fallbackType || el.tags?.amenity || kind,
+      lat: el.lat ?? el.center?.lat,
+      lng: el.lon ?? el.center?.lon,
+      address: addressFromTags(el.tags),
+      distFromRoute: Math.round(elDist(el)),
+    };
   }
 
-  // ── Meal stops (Overpass fallback when Foursquare unavailable) ───────────
-  // Single large circle at the stop point — simpler and faster than 4×4 sub-queries.
   if (kind === 'meal') {
-    const stopPt = pointAtDistance(route.geometry, distanceMeters);
-    const mR = 25000;
-    const mealFilters =
-      `nwr["amenity"~"^(restaurant|fast_food|cafe|pub)$"](around:${mR},${stopPt[1].toFixed(5)},${stopPt[0].toFixed(5)});`
-      + `nwr["highway"~"^(rest_area|services)$"](around:${mR},${stopPt[1].toFixed(5)},${stopPt[0].toFixed(5)});`
-      + `nwr["amenity"="rest_area"](around:${mR},${stopPt[1].toFixed(5)},${stopPt[0].toFixed(5)});`;
-    const mealQuery = `[out:json][timeout:20];(${mealFilters});out center tags 300;`;
-    let mealData;
-    try { mealData = await overpassQuery(mealQuery); }
-    catch (e) { console.warn('Overpass meal:', e.message); return []; }
-    if (!mealData.elements?.length) return [];
-
-    const restAreaCenters = [];
-    for (const el of mealData.elements) {
+    const candidates = [];
+    for (const el of cache.food) {
+      const d = elDist(el);
+      if (d > R) continue;
       const t = el.tags || {};
-      if (t.highway === 'rest_area' || t.highway === 'services' || t.amenity === 'rest_area') {
-        const lt = el.lat ?? el.center?.lat, ln = el.lon ?? el.center?.lon;
-        if (lt != null) restAreaCenters.push([ln, lt]);
-      }
-    }
-    const REST_NAME2 = /rest\s*area|rest\s*stop|welcome\s*cent|travel\s*plaza|service\s*area|information\s*cent/i;
-    const mealAllowed = ['restaurant','fast_food','cafe','pub'];
-    const mSeen = new Set();
-    const mCandidates = [];
-    for (const el of mealData.elements) {
-      const elLat = el.lat ?? el.center?.lat;
-      const elLng = el.lon ?? el.center?.lon;
-      if (elLat == null || elLng == null) continue;
-      if (mSeen.has(el.id)) continue; mSeen.add(el.id);
-      const t = el.tags || {};
-      if (t.highway === 'rest_area' || t.highway === 'services' || t.amenity === 'rest_area') continue;
-      if (!t.amenity || !mealAllowed.includes(t.amenity)) continue;
       const nm = ((t.name||'')+(t.brand||'')+(t.operator||'')).toLowerCase();
-      if (REST_NAME2.test(nm)) continue;
-      if (restAreaCenters.some(rc => haversine(rc, [elLng, elLat]) < 300)) continue;
-      const dist = haversine([stopPt[0], stopPt[1]], [elLng, elLat]);
-      if (dist > mR) continue;
-      mCandidates.push({ el, priority: mealPriority(el), dist, lat: elLat, lng: elLng });
+      if (_REST_NAME.test(nm)) continue;
+      const ln = el.lon ?? el.center?.lon;
+      const lt = el.lat ?? el.center?.lat;
+      if (restCenters.some(rc => haversine(rc, [ln, lt]) < 300)) continue;
+      candidates.push({ el, priority: mealPriority(el), dist: d });
     }
-    if (!mCandidates.length) return [];
-    mCandidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
-    return mCandidates.slice(0, 8).map(c => ({
-      name: c.el.tags?.name || c.el.tags?.brand || 'Restaurant',
-      brand: c.el.tags?.brand || null,
-      type: c.el.tags?.amenity || 'restaurant',
-      lat: c.lat, lng: c.lng,
-      address: addressFromTags(c.el.tags),
-      distFromRoute: Math.round(c.dist),
-    }));
+    candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+    return candidates.slice(0, 8).map(c => toResult(c.el, 'Restaurant'));
   }
 
-  // ── Gas and break stops: use Overpass (better coverage for fuel nodes) ────
-  const REST_TAG = `["highway"~"^(rest_area|services)$"]`;
-  const RA_TAG   = `["amenity"="rest_area"]`;
-
-  let unionFilters;
   if (kind === 'gas') {
-    unionFilters = circles(`["amenity"="fuel"]`);
-  } else if (kind === 'break') {
-    unionFilters = circles(`["highway"="rest_area"]`)
-      + circles(`["amenity"~"^(fast_food|cafe)$"]`)
-      + circles(`["amenity"="fuel"]`)
-      + circles(`["amenity"="restaurant"]`);
-  } else {
-    return [];
-  }
-
-  const query = `[out:json][timeout:20];(${unionFilters});out center tags 500;`;
-  let data;
-  try { data = await overpassQuery(query); }
-  catch (e) { console.warn('Overpass:', e.message); return []; }
-  if (!data.elements?.length) return [];
-
-  const REST_NAME = /rest\s*area|rest\s*stop|welcome\s*cent|travel\s*plaza|service\s*area|information\s*cent/i;
-
-  const seen = new Set();
-  const candidates = [];
-  for (const el of data.elements) {
-    const elLat = el.lat ?? el.center?.lat;
-    const elLng = el.lon ?? el.center?.lon;
-    if (elLat == null || elLng == null) continue;
-    if (seen.has(el.id)) continue;
-    seen.add(el.id);
-    const t = el.tags || {};
-
-    if (kind === 'gas') {
+    const candidates = [];
+    for (const el of cache.fuel) {
+      const t = el.tags || {};
       if (t.highway === 'rest_area' || t.amenity === 'rest_area') continue;
       const nm = ((t.name||'')+(t.brand||'')+(t.operator||'')).toLowerCase();
-      if (REST_NAME.test(nm) || /state\s*park|national\s*park/.test(nm)) continue;
+      if (_REST_NAME.test(nm) || /state\s*park|national\s*park/.test(nm)) continue;
+      const d = elDist(el);
+      if (d > R) continue;
+      candidates.push({ el, priority: gasPriority(el), dist: d });
     }
-
-    if (kind === 'break') {
-      const nm = ((t.brand||'')+(t.name||'')).toLowerCase();
-      if (nm.includes('subway')) continue;
-    }
-
-    const dist = nearestRouteDist(elLng, elLat);
-    if (dist > R) continue;
-
-    const priority = kind === 'gas'   ? gasPriority(el)
-                   : kind === 'break' ? breakPriority(el)
-                   : 0;
-    candidates.push({ el, priority, dist, lat: elLat, lng: elLng });
+    candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+    return candidates.slice(0, 8).map(c => toResult(c.el, 'Gas station', 'fuel'));
   }
-  if (!candidates.length) return [];
 
-  candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+  if (kind === 'break') {
+    const pool = [
+      ...cache.rest,
+      ...cache.food.filter(el => ['fast_food','cafe'].includes(el.tags?.amenity)),
+      ...cache.fuel,
+    ];
+    const seen = new Set();
+    const candidates = [];
+    for (const el of pool) {
+      if (seen.has(el.id)) continue; seen.add(el.id);
+      const nm = ((el.tags?.brand||'')+(el.tags?.name||'')).toLowerCase();
+      if (nm.includes('subway')) continue;
+      const d = elDist(el);
+      if (d > R) continue;
+      candidates.push({ el, priority: breakPriority(el), dist: d });
+    }
+    candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+    return candidates.slice(0, 8).map(c => {
+      const type = c.el.tags?.highway === 'rest_area' ? 'rest area' : (c.el.tags?.amenity || 'break');
+      return toResult(c.el, 'Rest stop', type);
+    });
+  }
 
-  return candidates.slice(0, 8).map(c => {
-    const typeLabel = c.el.tags?.highway === 'rest_area' ? 'rest area'
-                    : (c.el.tags?.amenity || kind);
-    return {
-      name: c.el.tags?.name || c.el.tags?.brand || 'Stop',
-      brand: c.el.tags?.brand || null,
-      type: typeLabel,
-      lat: c.lat, lng: c.lng,
-      address: addressFromTags(c.el.tags),
-      distFromRoute: Math.round(c.dist),
-    };
-  });
+  return [];
 }
 
 // ── Schedule computation ───────────────────────────────────────────────────
@@ -1178,18 +1035,16 @@ async function generatePlan() {
       waypointStops,
     });
 
-    // Step 4: Find places at each stop — all in parallel
+    // Step 4: Prefetch all POIs in 3 bbox queries, then resolve per stop locally
     const stopEvents = events.filter(e => ['break','gas','meal'].includes(e.type));
     stopEvents.forEach(e => {
       const point = pointAtDistance(route.geometry, e.distanceMeters);
       e.lng = point[0]; e.lat = point[1];
     });
-    showStatus(`Finding ${stopEvents.length} stops along your route…`);
-    const pois = await Promise.all(
-      stopEvents.map(e => findPOI(e.type, route, e.distanceMeters).catch(() => []))
-    );
-    stopEvents.forEach((e, i) => {
-      e.poiCandidates = pois[i] || [];
+    const routePOIs = await prefetchRoutePOIs(route);
+    stopEvents.forEach(e => {
+      const stopPt = [e.lng, e.lat];
+      e.poiCandidates = findPOIFromCache(e.type, routePOIs, stopPt);
       e.poi = e.poiCandidates[0] || null;
       e._selectedCandidate = 0;
     });
