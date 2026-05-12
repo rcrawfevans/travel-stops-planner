@@ -627,9 +627,12 @@ async function prefetchRoutePOIs(stopEvents, overnights = []) {
   ];
 
   if (overnights.length) {
-    // Hotels are often mapped as ways (building footprints) — include both node and way
+    // Hotels are often ways (building footprints); use 40km bbox to capture chain hotels near exits
+    const LR = 40000;
     const lodgingParts = overnights.flatMap(e => {
-      const b = bbox([e.lng, e.lat]);
+      const dLat = LR / 111320;
+      const dLng = LR / (111320 * Math.cos(e.lat * Math.PI / 180));
+      const b = `${(e.lat-dLat).toFixed(4)},${(e.lng-dLng).toFixed(4)},${(e.lat+dLat).toFixed(4)},${(e.lng+dLng).toFixed(4)}`;
       return [
         `node["tourism"~"hotel|motel|guest_house"](${b})`,
         `way["tourism"~"hotel|motel|guest_house"](${b})`,
@@ -653,7 +656,7 @@ async function prefetchRoutePOIs(stopEvents, overnights = []) {
 const _REST_NAME = /rest\s*area|rest\s*stop|welcome\s*cent|travel\s*plaza|service\s*area|information\s*cent/i;
 
 function findPOIFromCache(kind, cache, stopPt) {
-  const R = kind === 'meal' ? 30000 : kind === 'break' ? 5000 : 25000;
+  const R = kind === 'gas' ? 25000 : 5000; // gas: 15 mi; meal/break: 3 mi
 
   const restCenters = cache.rest.map(el => {
     const lt = el.lat ?? el.center?.lat;
@@ -738,8 +741,8 @@ function findPOIFromCache(kind, cache, stopPt) {
 }
 
 function findLodgingFromCache(lodgingEls, stopPt) {
-  const HILTON   = /hilton|hampton\s*inn|doubletree|embassy\s*suites|hilton\s*garden|homewood|home2|curio|waldorf|tru\s*by/i;
-  const MARRIOTT = /marriott|courtyard|residence\s*inn|fairfield|springhill|towneplace|aloft|westin|sheraton|four\s*points|moxy/i;
+  const HILTON   = /hilton|hampton|doubletree|embassy\s*suites|homewood\s*suites|home2|curio|waldorf|tru\s*by|canopy\s*by/i;
+  const MARRIOTT = /marriott|courtyard|residence\s*inn|fairfield|springhill|towneplace|aloft|westin|sheraton|four\s*points|moxy|autograph|renaissance|element\s*by/i;
   function priority(el) {
     const n = el.tags?.brand || el.tags?.name || '';
     if (HILTON.test(n))   return 0;
@@ -752,7 +755,7 @@ function findLodgingFromCache(lodgingEls, stopPt) {
     const lng = el.lon  ?? el.center?.lon;
     if (lat == null) return null;
     const dist = haversine(stopPt, [lng, lat]);
-    if (dist > 25000) return null;
+    if (dist > 40000) return null;
     return { el, lat, lng, dist, pr: priority(el) };
   }).filter(Boolean)
     .sort((a, b) => a.pr - b.pr || a.dist - b.dist)
