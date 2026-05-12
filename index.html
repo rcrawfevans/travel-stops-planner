@@ -611,7 +611,7 @@ async function prefetchRoutePOIs(route) {
   const [foodData, fuelData, restData] = await Promise.all([
     overpassQuery(buildQuery(`["amenity"~"^(restaurant|fast_food|cafe|pub)$"]`, 45), 55000).catch(noErr),
     overpassQuery(buildQuery(`["amenity"="fuel"]`, 45), 55000).catch(noErr),
-    overpassQuery(buildQuery([`["highway"~"^(rest_area|services)$"]`, `["amenity"="rest_area"]`], 45), 55000).catch(noErr),
+    overpassQuery(buildQuery(`["highway"~"^(rest_area|services)$"]`, 30), 40000).catch(noErr),
   ]);
 
   return {
