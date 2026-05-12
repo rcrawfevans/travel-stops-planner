@@ -589,13 +589,18 @@ function breakPriority(el) {
 
 function _routeBBox(route, padDeg) {
   const coords = route.geometry.coordinates;
-  const lats = coords.map(c => c[1]);
-  const lngs = coords.map(c => c[0]);
+  let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+  for (const [lng, lat] of coords) {
+    if (lat < minLat) minLat = lat;
+    if (lat > maxLat) maxLat = lat;
+    if (lng < minLng) minLng = lng;
+    if (lng > maxLng) maxLng = lng;
+  }
   return {
-    minLat: (Math.min(...lats) - padDeg).toFixed(4),
-    maxLat: (Math.max(...lats) + padDeg).toFixed(4),
-    minLng: (Math.min(...lngs) - padDeg).toFixed(4),
-    maxLng: (Math.max(...lngs) + padDeg).toFixed(4),
+    minLat: (minLat - padDeg).toFixed(4),
+    maxLat: (maxLat + padDeg).toFixed(4),
+    minLng: (minLng - padDeg).toFixed(4),
+    maxLng: (maxLng + padDeg).toFixed(4),
   };
 }
 
@@ -604,20 +609,21 @@ async function prefetchRoutePOIs(route) {
   const bbox = `${minLat},${minLng},${maxLat},${maxLng}`;
   const noErr = () => ({ elements: [] });
 
-  showStatus('Finding restaurants along route…');
-  const foodData = await overpassQuery(
-    `[out:json][timeout:30][bbox:${bbox}];(nwr["amenity"~"^(restaurant|fast_food|cafe|pub)$"];);out center tags 500;`
-  ).catch(noErr);
-
-  showStatus('Finding gas stations along route…');
-  const fuelData = await overpassQuery(
-    `[out:json][timeout:30][bbox:${bbox}];(nwr["amenity"="fuel"];);out center tags 400;`
-  ).catch(noErr);
-
-  showStatus('Finding rest areas along route…');
-  const restData = await overpassQuery(
-    `[out:json][timeout:30][bbox:${bbox}];(nwr["highway"~"^(rest_area|services)$"];nwr["amenity"="rest_area"];);out center tags 100;`
-  ).catch(noErr);
+  showStatus('Finding POIs along route…');
+  const [foodData, fuelData, restData] = await Promise.all([
+    overpassQuery(
+      `[out:json][timeout:45][bbox:${bbox}];(nwr["amenity"~"^(restaurant|fast_food|cafe|pub)$"];);out center tags 500;`,
+      55000
+    ).catch(noErr),
+    overpassQuery(
+      `[out:json][timeout:45][bbox:${bbox}];(nwr["amenity"="fuel"];);out center tags 400;`,
+      55000
+    ).catch(noErr),
+    overpassQuery(
+      `[out:json][timeout:45][bbox:${bbox}];(nwr["highway"~"^(rest_area|services)$"];nwr["amenity"="rest_area"];);out center tags 100;`,
+      55000
+    ).catch(noErr),
+  ]);
 
   return {
     food: foodData.elements || [],
