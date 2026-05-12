@@ -588,27 +588,20 @@ function breakPriority(el) {
 // ── POI: 3 Overpass queries covering the whole route, then local lookup ──────
 
 
-function _routePolylineStr(route, maxPts) {
-  const coords = route.geometry.coordinates;
-  const step = Math.max(1, Math.floor(coords.length / maxPts));
-  const pts = [];
-  for (let i = 0; i < coords.length; i += step) {
-    pts.push(`${coords[i][1].toFixed(4)},${coords[i][0].toFixed(4)}`);
-  }
-  const last = coords[coords.length - 1];
-  const lastStr = `${last[1].toFixed(4)},${last[0].toFixed(4)}`;
-  if (pts[pts.length - 1] !== lastStr) pts.push(lastStr);
-  return pts.join(',');
-}
+async function prefetchRoutePOIs(stopEvents) {
+  // One bbox per stop, unioned in a single query per POI type.
+  // Avoids polyline around: (unsupported on nwr) and full-route bboxes (cluster in cities).
+  const R_M = 25000;
 
-async function prefetchRoutePOIs(route) {
-  // Overpass polyline around: finds everything within R_M of the route line itself —
-  // no union of N circles, no bounding-box overshooting into distant cities.
-  const polyline = _routePolylineStr(route, 80);
-  const R_M = 25000; // 25 km corridor each side of route
+  function stopBBox([lng, lat]) {
+    const dLat = R_M / 111320;
+    const dLng = R_M / (111320 * Math.cos(lat * Math.PI / 180));
+    return `${(lat-dLat).toFixed(4)},${(lng-dLng).toFixed(4)},${(lat+dLat).toFixed(4)},${(lng+dLng).toFixed(4)}`;
+  }
 
   function buildQuery(filter, timeoutSec) {
-    return `[out:json][timeout:${timeoutSec}];(nwr${filter}(around:${R_M},${polyline}););out center tags;`;
+    const parts = stopEvents.map(e => `nwr${filter}(${stopBBox([e.lng, e.lat])})`).join(';');
+    return `[out:json][timeout:${timeoutSec}];(${parts});out center tags;`;
   }
 
   const noErr = () => ({ elements: [] });
@@ -1041,7 +1034,7 @@ async function generatePlan() {
       const point = pointAtDistance(route.geometry, e.distanceMeters);
       e.lng = point[0]; e.lat = point[1];
     });
-    const routePOIs = await prefetchRoutePOIs(route);
+    const routePOIs = await prefetchRoutePOIs(stopEvents);
     stopEvents.forEach(e => {
       const stopPt = [e.lng, e.lat];
       e.poiCandidates = findPOIFromCache(e.type, routePOIs, stopPt);
