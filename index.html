@@ -655,8 +655,10 @@ async function prefetchRoutePOIs(stopEvents, overnights = []) {
 
 const _REST_NAME = /rest\s*area|rest\s*stop|welcome\s*cent|travel\s*plaza|service\s*area|information\s*cent/i;
 
-function findPOIFromCache(kind, cache, stopPt) {
-  const R = kind === 'gas' ? 25000 : 5000; // gas: 15 mi; meal/break: 3 mi
+function findPOIFromCache(kind, cache, stopPt, routeSamples) {
+  // Search within 25km of stop point; filter by true perpendicular distance from highway.
+  const SEARCH_R  = 25000;
+  const HIGHWAY_R = kind === 'gas' ? 15000 : 5000; // gas: ~9 mi; meal/break: ~3 mi
 
   const restCenters = cache.rest.map(el => {
     const lt = el.lat ?? el.center?.lat;
@@ -664,54 +666,69 @@ function findPOIFromCache(kind, cache, stopPt) {
     return lt != null ? [ln, lt] : null;
   }).filter(Boolean);
 
-  function elDist(el) {
+  function elCoords(el) {
     const lt = el.lat ?? el.center?.lat;
     const ln = el.lon ?? el.center?.lon;
-    return (lt == null) ? Infinity : haversine([stopPt[0], stopPt[1]], [ln, lt]);
+    return (lt == null) ? null : [ln, lt];
   }
 
-  function toResult(el, fallbackName, fallbackType) {
+  // Distance from POI to the nearest point on the route (perpendicular "off highway" distance)
+  function distToRoute(poiPt) {
+    let best = Infinity;
+    for (const s of routeSamples) {
+      const d = haversine(poiPt, s);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  function toResult(el, fallbackName, fallbackType, routeDist) {
+    const coords = elCoords(el);
     return {
       name: el.tags?.name || el.tags?.brand || fallbackName,
       brand: el.tags?.brand || null,
       type: fallbackType || el.tags?.amenity || kind,
-      lat: el.lat ?? el.center?.lat,
-      lng: el.lon ?? el.center?.lon,
+      lat: coords?.[1],
+      lng: coords?.[0],
       address: addressFromTags(el.tags),
-      distFromRoute: Math.round(elDist(el)),
+      distFromRoute: Math.round(routeDist),
     };
   }
 
   if (kind === 'meal') {
     const candidates = [];
     for (const el of cache.food) {
-      const d = elDist(el);
-      if (d > R) continue;
+      const coords = elCoords(el);
+      if (!coords) continue;
+      if (haversine(stopPt, coords) > SEARCH_R) continue;
       const t = el.tags || {};
       const nm = ((t.name||'')+(t.brand||'')+(t.operator||'')).toLowerCase();
       if (_REST_NAME.test(nm)) continue;
-      const ln = el.lon ?? el.center?.lon;
-      const lt = el.lat ?? el.center?.lat;
-      if (restCenters.some(rc => haversine(rc, [ln, lt]) < 300)) continue;
-      candidates.push({ el, priority: mealPriority(el), dist: d });
+      if (restCenters.some(rc => haversine(rc, coords) < 300)) continue;
+      const rd = distToRoute(coords);
+      if (rd > HIGHWAY_R) continue;
+      candidates.push({ el, priority: mealPriority(el), rd });
     }
-    candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
-    return candidates.slice(0, 8).map(c => toResult(c.el, 'Restaurant'));
+    candidates.sort((a, b) => a.priority - b.priority || a.rd - b.rd);
+    return candidates.slice(0, 8).map(c => toResult(c.el, 'Restaurant', null, c.rd));
   }
 
   if (kind === 'gas') {
     const candidates = [];
     for (const el of cache.fuel) {
+      const coords = elCoords(el);
+      if (!coords) continue;
+      if (haversine(stopPt, coords) > SEARCH_R) continue;
       const t = el.tags || {};
       if (t.highway === 'rest_area' || t.amenity === 'rest_area') continue;
       const nm = ((t.name||'')+(t.brand||'')+(t.operator||'')).toLowerCase();
       if (_REST_NAME.test(nm) || /state\s*park|national\s*park/.test(nm)) continue;
-      const d = elDist(el);
-      if (d > R) continue;
-      candidates.push({ el, priority: gasPriority(el), dist: d });
+      const rd = distToRoute(coords);
+      if (rd > HIGHWAY_R) continue;
+      candidates.push({ el, priority: gasPriority(el), rd });
     }
-    candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
-    return candidates.slice(0, 8).map(c => toResult(c.el, 'Gas station', 'fuel'));
+    candidates.sort((a, b) => a.priority - b.priority || a.rd - b.rd);
+    return candidates.slice(0, 8).map(c => toResult(c.el, 'Gas station', 'fuel', c.rd));
   }
 
   if (kind === 'break') {
@@ -724,16 +741,19 @@ function findPOIFromCache(kind, cache, stopPt) {
     const candidates = [];
     for (const el of pool) {
       if (seen.has(el.id)) continue; seen.add(el.id);
+      const coords = elCoords(el);
+      if (!coords) continue;
+      if (haversine(stopPt, coords) > SEARCH_R) continue;
       const nm = ((el.tags?.brand||'')+(el.tags?.name||'')).toLowerCase();
-      if (nm.includes('subway')) continue;
-      const d = elDist(el);
-      if (d > R) continue;
-      candidates.push({ el, priority: breakPriority(el), dist: d });
+      if (SLOW_BREAK.test(nm)) continue;
+      const rd = distToRoute(coords);
+      if (rd > HIGHWAY_R) continue;
+      candidates.push({ el, priority: breakPriority(el), rd });
     }
-    candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+    candidates.sort((a, b) => a.priority - b.priority || a.rd - b.rd);
     return candidates.slice(0, 8).map(c => {
       const type = c.el.tags?.highway === 'rest_area' ? 'rest area' : (c.el.tags?.amenity || 'break');
-      return toResult(c.el, 'Rest stop', type);
+      return toResult(c.el, 'Rest stop', type, c.rd);
     });
   }
 
@@ -1091,16 +1111,22 @@ async function generatePlan() {
       waypointStops,
     });
 
-    // Step 4: Prefetch all POIs in 3 bbox queries, then resolve per stop locally
+    // Step 4: Prefetch all POIs, then resolve per stop using true highway proximity
     const stopEvents = events.filter(e => ['break','gas','meal'].includes(e.type));
     const overnights = events.filter(e => e.type === 'overnight');
     [...stopEvents, ...overnights].forEach(e => {
       const pt = pointAtDistance(route.geometry, e.distanceMeters);
       e.lng = pt[0]; e.lat = pt[1];
     });
+
+    // Sample route every 2km for perpendicular distance calculations
+    const routeSamples = [];
+    for (let d = 0; d <= route.distance; d += 2000)
+      routeSamples.push(pointAtDistance(route.geometry, d));
+
     const routePOIs = await prefetchRoutePOIs(stopEvents, overnights);
     stopEvents.forEach(e => {
-      e.poiCandidates = findPOIFromCache(e.type, routePOIs, [e.lng, e.lat]);
+      e.poiCandidates = findPOIFromCache(e.type, routePOIs, [e.lng, e.lat], routeSamples);
       e.poi = e.poiCandidates[0] || null;
       e._selectedCandidate = 0;
     });
