@@ -536,7 +536,7 @@ async function foursquareSearch(lat, lng, radiusM) {
   return data.results || [];
 }
 
-async function overpassQuery(query, timeoutMs = 25000) {
+async function overpassQuery(query, timeoutMs = 40000) {
   return _ovSemaphore(async () => {
   let lastErr;
   for (const mirror of OVERPASS_MIRRORS) {
