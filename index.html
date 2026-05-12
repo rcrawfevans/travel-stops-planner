@@ -495,6 +495,7 @@ async function fetchWithTimeout(url, timeoutMs, options = {}) {
 
 
 async function overpassQuery(query, timeoutMs = 40000) {
+  console.log('[Overpass] query length:', query.length, '| preview:', query.slice(0, 120));
   let lastErr;
   for (const mirror of OVERPASS_MIRRORS) {
     try {
@@ -503,7 +504,12 @@ async function overpassQuery(query, timeoutMs = 40000) {
         body: 'data=' + encodeURIComponent(query),
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       });
-      if (!r.ok) { lastErr = new Error(`HTTP ${r.status}`); continue; }
+      if (!r.ok) {
+        const errText = await r.text().catch(() => '');
+        console.error('[Overpass] HTTP', r.status, 'from', mirror, ':', errText.slice(0, 400));
+        lastErr = new Error(`HTTP ${r.status}`);
+        continue;
+      }
       return await r.json();
     } catch (e) {
       lastErr = e;
