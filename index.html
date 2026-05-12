@@ -588,22 +588,27 @@ function breakPriority(el) {
 // ── POI: 3 Overpass queries covering the whole route, then local lookup ──────
 
 
-async function prefetchRoutePOIs(route) {
-  // Sample points every 80km along route; 50km radius per point ensures full coverage with overlap.
-  const STEP_M = 80000;
-  const R_M    = 50000;
-  const totalDist = route.distance;
-
+function _routePolylineStr(route, maxPts) {
+  const coords = route.geometry.coordinates;
+  const step = Math.max(1, Math.floor(coords.length / maxPts));
   const pts = [];
-  for (let d = 0; d <= totalDist; d += STEP_M) {
-    const [lng, lat] = pointAtDistance(route.geometry, d);
-    pts.push(`${lat.toFixed(4)},${lng.toFixed(4)}`);
+  for (let i = 0; i < coords.length; i += step) {
+    pts.push(`${coords[i][1].toFixed(4)},${coords[i][0].toFixed(4)}`);
   }
+  const last = coords[coords.length - 1];
+  const lastStr = `${last[1].toFixed(4)},${last[0].toFixed(4)}`;
+  if (pts[pts.length - 1] !== lastStr) pts.push(lastStr);
+  return pts.join(',');
+}
 
-  function buildQuery(filters, timeoutSec) {
-    const fa = Array.isArray(filters) ? filters : [filters];
-    const parts = pts.flatMap(ll => fa.map(f => `nwr${f}(around:${R_M},${ll})`)).join(';');
-    return `[out:json][timeout:${timeoutSec}];(${parts});out center tags;`;
+async function prefetchRoutePOIs(route) {
+  // Overpass polyline around: finds everything within R_M of the route line itself —
+  // no union of N circles, no bounding-box overshooting into distant cities.
+  const polyline = _routePolylineStr(route, 80);
+  const R_M = 25000; // 25 km corridor each side of route
+
+  function buildQuery(filter, timeoutSec) {
+    return `[out:json][timeout:${timeoutSec}];(nwr${filter}(around:${R_M},${polyline}););out center tags;`;
   }
 
   const noErr = () => ({ elements: [] });
@@ -624,7 +629,7 @@ async function prefetchRoutePOIs(route) {
 const _REST_NAME = /rest\s*area|rest\s*stop|welcome\s*cent|travel\s*plaza|service\s*area|information\s*cent/i;
 
 function findPOIFromCache(kind, cache, stopPt) {
-  const R = kind === 'meal' ? 25000 : 15000;
+  const R = kind === 'meal' ? 30000 : 25000;
 
   const restCenters = cache.rest.map(el => {
     const lt = el.lat ?? el.center?.lat;
