@@ -596,37 +596,43 @@ function breakPriority(el) {
 // ── POI: 3 Overpass queries covering the whole route, then local lookup ──────
 
 
-async function prefetchRoutePOIs(stopEvents) {
-  // One bbox per stop, unioned in a single query per POI type.
-  // Avoids polyline around: (unsupported on nwr) and full-route bboxes (cluster in cities).
+async function prefetchRoutePOIs(stopEvents, overnights = []) {
   const R_M = 25000;
 
-  function stopBBox([lng, lat]) {
+  function bbox([lng, lat]) {
     const dLat = R_M / 111320;
     const dLng = R_M / (111320 * Math.cos(lat * Math.PI / 180));
     return `${(lat-dLat).toFixed(4)},${(lng-dLng).toFixed(4)},${(lat+dLat).toFixed(4)},${(lng+dLng).toFixed(4)}`;
   }
 
-  function buildQuery(filter, timeoutSec) {
-    const parts = stopEvents.flatMap(e => {
-      const bbox = stopBBox([e.lng, e.lat]);
-      return [`node${filter}(${bbox})`, `way${filter}(${bbox})`];
-    }).join(';');
+  // node-only: halves sub-query count vs node+way; POI nodes cover 95%+ of amenities
+  function buildQuery(events, filter, timeoutSec) {
+    const parts = events.map(e => `node${filter}(${bbox([e.lng, e.lat])})`).join(';');
     return `[out:json][timeout:${timeoutSec}];(${parts};);out center tags;`;
   }
 
   const noErr = () => ({ elements: [] });
   showStatus('Finding POIs along route…');
-  const [foodData, fuelData, restData] = await Promise.all([
-    overpassQuery(buildQuery(`["amenity"~"^(restaurant|fast_food|cafe|pub)$"]`, 45), 55000).catch(noErr),
-    overpassQuery(buildQuery(`["amenity"="fuel"]`, 45), 55000).catch(noErr),
-    overpassQuery(buildQuery(`["highway"~"^(rest_area|services)$"]`, 30), 40000).catch(noErr),
-  ]);
+
+  const queries = [
+    overpassQuery(buildQuery(stopEvents, `["amenity"~"^(restaurant|fast_food|cafe|pub)$"]`, 35), 45000).catch(noErr),
+    overpassQuery(buildQuery(stopEvents, `["amenity"="fuel"]`, 35), 45000).catch(noErr),
+    overpassQuery(buildQuery(stopEvents, `["highway"~"^(rest_area|services)$"]`, 25), 35000).catch(noErr),
+  ];
+
+  if (overnights.length) {
+    queries.push(
+      overpassQuery(buildQuery(overnights, `["tourism"~"^(hotel|motel|guest_house)$"]`, 25), 35000).catch(noErr)
+    );
+  }
+
+  const [foodData, fuelData, restData, lodgingData = { elements: [] }] = await Promise.all(queries);
 
   return {
-    food: foodData.elements || [],
-    fuel: fuelData.elements || [],
-    rest: restData.elements || [],
+    food:    foodData.elements    || [],
+    fuel:    fuelData.elements    || [],
+    rest:    restData.elements    || [],
+    lodging: lodgingData.elements || [],
   };
 }
 
@@ -715,6 +721,35 @@ function findPOIFromCache(kind, cache, stopPt) {
   }
 
   return [];
+}
+
+function findLodgingFromCache(lodgingEls, stopPt) {
+  const HILTON   = /hilton|hampton\s*inn|doubletree|embassy\s*suites|hilton\s*garden|homewood|home2|curio|waldorf|tru\s*by/i;
+  const MARRIOTT = /marriott|courtyard|residence\s*inn|fairfield|springhill|towneplace|aloft|westin|sheraton|four\s*points|moxy/i;
+  function priority(el) {
+    const n = el.tags?.brand || el.tags?.name || '';
+    if (HILTON.test(n))   return 0;
+    if (MARRIOTT.test(n)) return 1;
+    if (el.tags?.tourism === 'hotel') return 2;
+    return 3;
+  }
+  return lodgingEls.map(el => {
+    const lat = el.lat ?? el.center?.lat;
+    const lng = el.lon  ?? el.center?.lon;
+    if (lat == null) return null;
+    const dist = haversine(stopPt, [lng, lat]);
+    if (dist > 25000) return null;
+    return { el, lat, lng, dist, pr: priority(el) };
+  }).filter(Boolean)
+    .sort((a, b) => a.pr - b.pr || a.dist - b.dist)
+    .map(c => ({
+      name: c.el.tags?.name || c.el.tags?.brand || 'Hotel',
+      brand: c.el.tags?.brand || null,
+      type: c.el.tags?.tourism || 'hotel',
+      lat: c.lat, lng: c.lng,
+      address: addressFromTags(c.el.tags),
+      distFromRoute: Math.round(c.dist),
+    }));
 }
 
 // ── Schedule computation ───────────────────────────────────────────────────
@@ -1041,16 +1076,20 @@ async function generatePlan() {
 
     // Step 4: Prefetch all POIs in 3 bbox queries, then resolve per stop locally
     const stopEvents = events.filter(e => ['break','gas','meal'].includes(e.type));
-    stopEvents.forEach(e => {
-      const point = pointAtDistance(route.geometry, e.distanceMeters);
-      e.lng = point[0]; e.lat = point[1];
+    const overnights = events.filter(e => e.type === 'overnight');
+    [...stopEvents, ...overnights].forEach(e => {
+      const pt = pointAtDistance(route.geometry, e.distanceMeters);
+      e.lng = pt[0]; e.lat = pt[1];
     });
-    const routePOIs = await prefetchRoutePOIs(stopEvents);
+    const routePOIs = await prefetchRoutePOIs(stopEvents, overnights);
     stopEvents.forEach(e => {
-      const stopPt = [e.lng, e.lat];
-      e.poiCandidates = findPOIFromCache(e.type, routePOIs, stopPt);
+      e.poiCandidates = findPOIFromCache(e.type, routePOIs, [e.lng, e.lat]);
       e.poi = e.poiCandidates[0] || null;
       e._selectedCandidate = 0;
+    });
+    overnights.forEach(e => {
+      const lodging = findLodgingFromCache(routePOIs.lodging, [e.lng, e.lat]);
+      if (lodging.length) e.poi = lodging[0];
     });
 
     // Step 5a: Fill in missing addresses via reverse geocoding (staggered parallel)
@@ -1064,27 +1103,18 @@ async function generatePlan() {
       ));
     }
 
-    // Step 5c: Reverse-geocode + find lodging for overnight stops
-    const overnights = events.filter(e => e.type === 'overnight');
-    overnights.forEach((e) => {
-      const pt = pointAtDistance(route.geometry, e.distanceMeters);
-      e.lat = pt[1]; e.lng = pt[0];
-    });
-    if (overnights.length) showStatus('Finding lodging for overnight stops…');
+    // Step 5c: Reverse-geocode overnight stops to get city name
     const offsetBase = needAddr.length;
     await Promise.all(overnights.map((e, i) =>
-      sleep((offsetBase + i) * 1100).then(() => Promise.all([
-        reverseGeocode(e.lat, e.lng),
-        findLodging(e.lat, e.lng),
-      ])).then(([addr, lodging]) => {
-        if (addr) {
-          const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
-          const cityState = parts.length >= 3 ? parts.slice(-4, -2).join(', ') : addr;
-          e.cityName = cityState;
-          e.label = `Lodging — End of Day ${e.day} (near ${cityState})`;
-        }
-        if (lodging) e.poi = lodging;
-      }).catch(() => {})
+      sleep((offsetBase + i) * 1100).then(() => reverseGeocode(e.lat, e.lng))
+        .then(addr => {
+          if (addr) {
+            const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+            const cityState = parts.length >= 3 ? parts.slice(-4, -2).join(', ') : addr;
+            e.cityName = cityState;
+            e.label = `Lodging — End of Day ${e.day} (near ${cityState})`;
+          }
+        }).catch(() => {})
     ));
 
     // Render
@@ -1294,51 +1324,6 @@ function renderSchedule(events, info) {
   container.innerHTML = html;
 }
 
-async function findLodging(lat, lng) {
-  const R = 25000;
-  const ar = `(around:${R},${lat},${lng})`;
-  const query = `[out:json][timeout:20];(
-    node["tourism"~"^(hotel|motel|guest_house)$"]${ar};
-    way["tourism"~"^(hotel|motel|guest_house)$"]${ar};
-    node["amenity"="hotel"]${ar};
-    way["amenity"="hotel"]${ar};
-  );out center tags 100;`;
-  let data;
-  try { data = await overpassQuery(query, 10000); } catch (e) { return null; }
-  if (!data.elements || !data.elements.length) return null;
-
-  const HILTON   = /hilton|hampton\s*inn|doubletree|embassy\s*suites|hilton\s*garden|homewood\s*suites|home2|curio|waldorf|tapestry|tru\s*by\s*hilton|canopy/i;
-  const MARRIOTT = /marriott|courtyard|residence\s*inn|fairfield|springhill|towneplace|aloft|ac\s*hotel|westin|sheraton|four\s*points|delta\s*hotel|autograph|m.ridien|moxy|st\.?\s*regis|ritz.?carlton|w\s*hotel/i;
-
-  function lodgingPriority(el) {
-    const name = (el.tags?.brand || el.tags?.name || '');
-    if (HILTON.test(name))   return 0;
-    if (MARRIOTT.test(name)) return 1;
-    if (el.tags?.tourism === 'hotel') return 2;
-    return 3; // motel or other
-  }
-
-  const candidates = data.elements.map(el => {
-    const elLat = el.lat ?? el.center?.lat;
-    const elLng = el.lon ?? el.center?.lon;
-    if (elLat == null || elLng == null) return null;
-    return { el, lat: elLat, lng: elLng,
-      dist: haversine([lng, lat], [elLng, elLat]),
-      priority: lodgingPriority(el) };
-  }).filter(Boolean);
-  if (!candidates.length) return null;
-
-  candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
-  const best = candidates[0];
-  return {
-    name: best.el.tags?.name || best.el.tags?.brand || 'Hotel',
-    brand: best.el.tags?.brand || null,
-    type: best.el.tags?.tourism || 'hotel',
-    lat: best.lat, lng: best.lng,
-    address: addressFromTags(best.el.tags),
-    distFromRoute: Math.round(best.dist),
-  };
-}
 
 function renderMap(events, route, startCoord, endCoord) {
   const mapDiv = document.getElementById('tripMap');
