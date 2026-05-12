@@ -606,7 +606,10 @@ async function prefetchRoutePOIs(stopEvents) {
   }
 
   function buildQuery(filter, timeoutSec) {
-    const parts = stopEvents.map(e => `nwr${filter}(${stopBBox([e.lng, e.lat])})`).join(';');
+    const parts = stopEvents.flatMap(e => {
+      const bbox = stopBBox([e.lng, e.lat]);
+      return [`node${filter}(${bbox})`, `way${filter}(${bbox})`];
+    }).join(';');
     return `[out:json][timeout:${timeoutSec}];(${parts});out center tags;`;
   }
 
