@@ -1,0 +1,1527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Travel Stops Planner</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Georgia, serif; background: #F4F1EA; color: #2A2A2A; }
+
+  header {
+    background: #2C5F7C; color: white; padding: 20px 32px;
+  }
+  header h1 { font-size: 26px; }
+  header p  { font-size: 14px; color: #BFD9E8; margin-top: 4px; }
+
+  main {
+    max-width: 960px; margin: 0 auto; padding: 24px 28px;
+  }
+
+  .card {
+    background: white; border-radius: 6px; padding: 22px 26px;
+    margin-bottom: 18px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+  .card h2 { font-size: 18px; color: #2C5F7C; margin-bottom: 14px; }
+  .card h3 { font-size: 15px; color: #2C5F7C; margin: 14px 0 8px; }
+
+  .row { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 12px; }
+  .field { flex: 1; min-width: 180px; }
+  .field label {
+    display: block; font-size: 12px; color: #666;
+    margin-bottom: 4px; font-weight: bold;
+  }
+  .field input, .field select {
+    width: 100%; padding: 8px 10px; border: 1px solid #C8C8C8;
+    border-radius: 4px; font-size: 14px; font-family: Georgia, serif;
+  }
+
+  .detour-row {
+    display: flex; gap: 8px; margin-bottom: 6px; align-items: center;
+  }
+  .detour-row input { flex: 1; }
+  .btn {
+    padding: 9px 18px; border: none; border-radius: 4px;
+    cursor: pointer; font-size: 14px; font-weight: bold;
+    font-family: Georgia, serif; text-decoration: none;
+    display: inline-block; color: white;
+  }
+  .btn-primary { background: #2C5F7C; }
+  .btn-primary:hover { background: #1F4659; }
+  .btn-primary:disabled { background: #8AA5B5; cursor: not-allowed; }
+  .btn-secondary { background: #6B7B7F; }
+  .btn-secondary:hover { background: #4F5C60; }
+  .btn-add { background: #5A8A5C; padding: 4px 12px; font-size: 12px; }
+  .btn-add:hover { background: #466B47; }
+  .btn-remove {
+    background: #B5544D; padding: 4px 10px; font-size: 12px;
+  }
+  .btn-remove:hover { background: #8C413B; }
+
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+
+  /* Loading */
+  .loading {
+    background: #FFF8DC; border-left: 4px solid #C0962B;
+    padding: 14px 18px; border-radius: 4px; margin-top: 12px;
+    font-size: 14px; color: #6B5320;
+  }
+  .loading::before {
+    content: "⏳"; margin-right: 8px;
+  }
+  .error {
+    background: #FBEBE9; border-left: 4px solid #B5544D;
+    padding: 14px 18px; border-radius: 4px; margin-top: 12px;
+    font-size: 14px; color: #6B2A24;
+  }
+  .error::before {
+    content: "⚠️"; margin-right: 8px;
+  }
+
+  /* Schedule */
+  .schedule {
+    background: white; border-radius: 6px; padding: 22px 26px;
+    margin-bottom: 18px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+  }
+  .trip-summary {
+    background: #EDF4F8; border-left: 4px solid #2C5F7C;
+    padding: 14px 18px; margin-bottom: 18px; border-radius: 4px;
+  }
+  .trip-summary p { font-size: 14px; line-height: 1.6; }
+  .trip-summary b { color: #2C5F7C; }
+
+  .day-header {
+    background: #2C5F7C; color: white; padding: 8px 14px;
+    border-radius: 4px; margin: 16px 0 10px;
+    font-size: 15px; font-weight: bold;
+  }
+
+  table.schedule-table {
+    width: 100%; border-collapse: collapse; font-size: 14px;
+  }
+  table.schedule-table th {
+    background: #F4F1EA; padding: 10px 12px; text-align: left;
+    font-size: 12px; color: #666; border-bottom: 2px solid #C8C8C8;
+  }
+  table.schedule-table td {
+    padding: 10px 12px; border-bottom: 1px solid #E8E8E8;
+    vertical-align: top;
+  }
+  table.schedule-table tr.stop-departure td,
+  table.schedule-table tr.stop-arrival td {
+    background: #EDF4F8; font-weight: bold;
+  }
+  table.schedule-table tr.stop-meal td { background: #FBF5E8; }
+  table.schedule-table tr.stop-gas td  { background: #F2EDF5; }
+  table.schedule-table tr.stop-overnight td {
+    background: #2C5F7C; color: white; font-weight: bold;
+  }
+  table.schedule-table tr.stop-overnight td a { color: #BFD9E8; text-decoration: underline; }
+  table.schedule-table tr.stop-overnight td b { color: white; }
+  table.schedule-table tr.stop-overnight td .place-meta { color: #BFD9E8; }
+  .stop-icon { font-size: 16px; margin-right: 6px; }
+  .stop-place { font-size: 13px; }
+  .stop-place b { color: #2C5F7C; }
+  .stop-place a { color: #2C5F7C; text-decoration: underline; font-size: 12px; }
+  .stop-place .place-meta {
+    font-size: 11px; color: #666; display: block; margin-top: 2px;
+  }
+  .stop-place .place-tbd { color: #999; font-style: italic; }
+
+  .poi-alts { display: block; margin-top: 5px; }
+  .poi-alts-toggle {
+    background: none; border: none; padding: 0;
+    color: #2C5F7C; cursor: pointer; font-size: 12px;
+    font-family: Georgia, serif; text-decoration: underline;
+  }
+  .poi-alts-toggle:hover { color: #1F4659; }
+  .poi-alt-list {
+    margin-top: 4px; border: 1px solid #C8C8C8;
+    border-radius: 4px; background: white;
+  }
+  .poi-alt-item {
+    padding: 6px 10px; border-bottom: 1px solid #E8E8E8;
+    cursor: pointer; display: flex; align-items: center;
+    gap: 8px; font-size: 12px;
+  }
+  .poi-alt-item:last-child { border-bottom: none; }
+  .poi-alt-item:hover { background: #EDF4F8; }
+  .poi-alt-item.selected { background: #EDF4F8; font-weight: bold; }
+  .poi-alt-name { flex: 1; }
+
+  table.schedule-table tr.stop-planned td { background: #EBF5EB; font-weight: bold; }
+
+  .planned-stop-row {
+    display: flex; gap: 8px; margin-bottom: 6px; align-items: center; flex-wrap: wrap;
+  }
+  .planned-stop-row .psname { flex: 0 0 180px; min-width: 120px; }
+  .planned-stop-row .psaddr { flex: 1; min-width: 200px; }
+  .planned-stop-row select {
+    flex: 0 0 90px; padding: 8px 6px; border: 1px solid #C8C8C8;
+    border-radius: 4px; font-size: 14px; font-family: Georgia, serif;
+  }
+
+  .hidden { display: none; }
+
+  #tripMap {
+    height: 380px; border-radius: 6px; margin-bottom: 18px;
+    border: 1px solid #C8C8C8;
+  }
+
+  /* Print styles */
+  @media print {
+    body { background: white; }
+    header { background: white; color: black; padding: 0 0 12px; border-bottom: 2px solid black; }
+    header p { color: #555; }
+    .no-print { display: none !important; }
+    main { padding: 12px 0; max-width: 100%; }
+    .card { box-shadow: none; padding: 0; margin-bottom: 12px; }
+    .schedule { box-shadow: none; padding: 0; }
+    .trip-summary {
+      background: white; border: 1px solid #888;
+      padding: 10px 14px;
+    }
+    .day-header { background: white; color: black; border: 1px solid black; padding: 6px 10px; }
+    table.schedule-table th { background: white; border-bottom: 2px solid black; }
+    table.schedule-table td { border-bottom: 1px solid #888; }
+    table.schedule-table tr.stop-departure td,
+    table.schedule-table tr.stop-arrival td,
+    table.schedule-table tr.stop-meal td,
+    table.schedule-table tr.stop-gas td,
+    table.schedule-table tr.stop-overnight td,
+    table.schedule-table tr.stop-planned td {
+      background: white !important; color: black !important;
+    }
+    .stop-place a { color: black; }
+    #tripMap { display: none; }
+    @page { margin: 0.6in; }
+    table.schedule-table { page-break-inside: auto; }
+    tr { page-break-inside: avoid; page-break-after: auto; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🚗 Travel Stops Planner</h1>
+  <p>Plan a road trip with timed breaks, meals, and gas stops — finds real places along your route</p>
+</header>
+
+<main>
+  <section class="card no-print">
+    <h2>Trip Details</h2>
+    <div class="row">
+      <div class="field">
+        <label>Starting From</label>
+        <input id="startPlace" value="301 W 40th Street, Hays, KS">
+      </div>
+      <div class="field">
+        <label>Going To</label>
+        <input id="endPlace" value="1648 Rossmay Drive, Westfield, IN">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Departure Date</label>
+        <input id="departDate" type="date">
+      </div>
+      <div class="field">
+        <label>Departure Time</label>
+        <input id="departTime" type="time" value="08:00">
+      </div>
+    </div>
+
+    <h3>Route Through These Cities (optional)</h3>
+    <p style="font-size:13px;color:#444;margin-bottom:8px">
+      Type a <b>city name</b> you want the route to go through. This is how you avoid roads —
+      pick a city <b>far enough away</b> from the road you want to avoid that the trip is forced
+      to detour through it.
+    </p>
+    <p style="font-size:12px;color:#666;margin-bottom:10px;background:#FFF8DC;padding:8px 10px;border-radius:4px">
+      <b>Example:</b> To avoid I-70 east of Topeka on a Hays → Indianapolis trip,
+      type <b>"Wichita, KS"</b> below. That forces the route south of I-70.<br>
+      <b>Don't</b> type road names like "I-70" — only city names work.
+    </p>
+    <div id="detourList"></div>
+    <button class="btn btn-add" onclick="addDetour()">+ Add a City to Route Through</button>
+  </section>
+
+  <section class="card no-print">
+    <h2>Planned Stops</h2>
+    <p style="font-size:13px;color:#444;margin-bottom:8px">
+      Add specific places you want to stop at, <b>in the order you'll visit them</b>.
+      The planner will show your exact arrival time at each one and fit gas, rest, and
+      meal stops around them.
+    </p>
+    <div id="plannedStopList"></div>
+    <button class="btn btn-add" onclick="addPlannedStop()">+ Add a Planned Stop</button>
+  </section>
+
+  <section class="card no-print">
+    <h2>Stop Preferences</h2>
+    <div class="row">
+      <div class="field">
+        <label>Quick Break (restroom/fast food) — every</label>
+        <input id="breakFreq" type="number" step="0.5" min="0.5" max="24" value="1.5"> hours
+      </div>
+      <div class="field">
+        <label>Gas Stop — every</label>
+        <input id="gasFreq" type="number" step="any" min="0.5" max="24" value="4"> hours
+      </div>
+      <div class="field">
+        <label>Max Drive Hours per Day</label>
+        <input id="maxPerDay" type="number" step="any" min="1" max="24" value="10">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label><input id="includeBreakfast" type="checkbox"> Breakfast at</label>
+        <input id="breakfastTime" type="time" value="07:00">
+      </div>
+      <div class="field">
+        <label><input id="includeLunch" type="checkbox" checked> Lunch at</label>
+        <input id="lunchTime" type="time" value="12:00">
+      </div>
+      <div class="field">
+        <label><input id="includeDinner" type="checkbox" checked> Dinner at</label>
+        <input id="dinnerTime" type="time" value="18:00">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Next-day departure time (for multi-day trips)</label>
+        <input id="nextDayDepart" type="time" value="08:00">
+      </div>
+      <div class="field">
+        <label>Skip meals in final ___ hours of driving</label>
+        <input id="noMealsLastHours" type="number" step="0.5" min="0" max="12" value="2"> hours
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="generateBtn" class="btn btn-primary" onclick="generatePlan()">Generate Plan</button>
+    </div>
+    <div id="status"></div>
+  </section>
+
+  <section id="output" class="hidden">
+    <div id="tripMap"></div>
+    <div class="schedule" id="scheduleContent"></div>
+
+    <div class="actions no-print" style="justify-content:center;margin-bottom:8px">
+      <button class="btn btn-primary" onclick="window.print()">🖨 Print Plan</button>
+      <button class="btn btn-primary" onclick="savePDF()">💾 Save as PDF</button>
+      <a id="mapsBtn" class="btn btn-secondary" href="#" target="_blank">🗺 Open in Google Maps</a>
+    </div>
+    <p id="pdfHint" class="no-print hidden" style="text-align:center;font-size:13px;color:#555;margin-bottom:18px">
+      In the print dialog, set the destination to <b>Save as PDF</b>, then click Save.
+    </p>
+  </section>
+</main>
+
+<script>
+// ── Warn if opened as file:// (APIs are blocked by browser CORS) ────────────
+if (location.protocol === 'file:') {
+  document.addEventListener('DOMContentLoaded', () => {
+    const banner = document.createElement('div');
+    banner.style.cssText = 'background:#B5544D;color:white;padding:14px 20px;font-size:15px;text-align:center;position:sticky;top:0;z-index:9999';
+    banner.innerHTML = '<b>⚠ Open via the launcher, not by double-clicking the HTML file.</b> '
+      + 'Double-click <b>launch.command</b> in the same folder, then use the browser tab it opens.';
+    document.body.prepend(banner);
+  });
+}
+
+// ── Config ─────────────────────────────────────────────────────────────────
+const NOMINATIM       = 'https://nominatim.openstreetmap.org';
+const OSRM            = 'https://router.project-osrm.org';
+const OVERPASS        = 'https://overpass-api.de/api/interpreter';
+const FOURSQUARE_KEY  = 'NUMDLANQZ5SJTH2VINJQ5BHRWXJE3JYUOD1NIB0UFTLFHUQ3';
+
+// ── Detour management ──────────────────────────────────────────────────────
+let detours = [];
+function addDetour(value = '') {
+  detours.push(value);
+  renderDetours();
+}
+function removeDetour(idx) {
+  detours.splice(idx, 1);
+  renderDetours();
+}
+function updateDetour(idx, value) {
+  detours[idx] = value;
+}
+function renderDetours() {
+  const list = document.getElementById('detourList');
+  list.innerHTML = detours.map((d, i) => `
+    <div class="detour-row">
+      <input value="${d.replace(/"/g, '&quot;')}" placeholder="e.g. Wichita, KS"
+        oninput="updateDetour(${i}, this.value)">
+      <button class="btn btn-remove" onclick="removeDetour(${i})">Remove</button>
+    </div>
+  `).join('');
+}
+
+// ── Planned stops management ────────────────────────────────────────────────
+let plannedStops = [];
+function addPlannedStop(name = '', address = '', duration = 20) {
+  plannedStops.push({name, address, duration});
+  renderPlannedStops();
+}
+function removePlannedStop(idx) {
+  plannedStops.splice(idx, 1);
+  renderPlannedStops();
+}
+function updatePlannedStop(idx, field, value) {
+  plannedStops[idx][field] = value;
+}
+function renderPlannedStops() {
+  const list = document.getElementById('plannedStopList');
+  list.innerHTML = plannedStops.map((ps, i) => `
+    <div class="planned-stop-row">
+      <input class="psname" value="${ps.name.replace(/"/g, '&quot;')}"
+        placeholder="Name (e.g. McDonald's)"
+        oninput="updatePlannedStop(${i}, 'name', this.value)">
+      <input class="psaddr" value="${ps.address.replace(/"/g, '&quot;')}"
+        placeholder="Address (e.g. 125 E Diamond Dr, Salina, KS)"
+        oninput="updatePlannedStop(${i}, 'address', this.value)">
+      <select onchange="updatePlannedStop(${i}, 'duration', parseInt(this.value))">
+        ${[10, 15, 20, 30, 45, 60].map(d =>
+          `<option value="${d}"${ps.duration == d ? ' selected' : ''}>${d} min</option>`
+        ).join('')}
+      </select>
+      <button class="btn btn-remove" onclick="removePlannedStop(${i})">Remove</button>
+    </div>
+  `).join('');
+}
+
+document.getElementById('departDate').valueAsDate = new Date();
+
+// ── Status messaging ───────────────────────────────────────────────────────
+function showStatus(message, type = 'loading') {
+  const el = document.getElementById('status');
+  el.innerHTML = `<div class="${type}">${message}</div>`;
+}
+function clearStatus() { document.getElementById('status').innerHTML = ''; }
+function setBusy(busy) {
+  document.getElementById('generateBtn').disabled = busy;
+}
+
+// ── Time helpers ───────────────────────────────────────────────────────────
+function pad(n) { return String(n).padStart(2, '0'); }
+function formatTime(date) {
+  let h = date.getHours();
+  const m = date.getMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12; if (h === 0) h = 12;
+  return `${h}:${pad(m)} ${ampm}`;
+}
+function formatDate(date) {
+  return date.toLocaleDateString('en-US',
+    {weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'});
+}
+function addMinutes(date, minutes) {
+  return new Date(date.getTime() + minutes * 60000);
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Geometry helpers ───────────────────────────────────────────────────────
+function haversine(a, b) {
+  // a, b are [lng, lat]
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const lat1 = toRad(a[1]), lat2 = toRad(b[1]);
+  const dLat = toRad(b[1] - a[1]);
+  const dLng = toRad(b[0] - a[0]);
+  const x = Math.sin(dLat/2)**2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+function pointAtDistance(geometry, targetMeters) {
+  const coords = geometry.coordinates;
+  let cum = 0;
+  for (let i = 1; i < coords.length; i++) {
+    const segDist = haversine(coords[i-1], coords[i]);
+    if (cum + segDist >= targetMeters) {
+      const t = segDist > 0 ? (targetMeters - cum) / segDist : 0;
+      return [
+        coords[i-1][0] + t * (coords[i][0] - coords[i-1][0]),
+        coords[i-1][1] + t * (coords[i][1] - coords[i-1][1]),
+      ];
+    }
+    cum += segDist;
+  }
+  return coords[coords.length - 1];
+}
+
+// ── API calls ──────────────────────────────────────────────────────────────
+async function geocode(query) {
+  const url = `${NOMINATIM}/search?q=${encodeURIComponent(query)}&format=json&limit=1`;
+  const r = await fetch(url, {headers: {'Accept': 'application/json'}});
+  if (!r.ok) throw new Error(`Geocoding failed for "${query}"`);
+  const data = await r.json();
+  if (!data.length) throw new Error(`Could not find location: "${query}"`);
+  return {
+    lat: parseFloat(data[0].lat),
+    lng: parseFloat(data[0].lon),
+    display: data[0].display_name,
+  };
+}
+
+async function getRoute(points) {
+  const coordStr = points.map(p => `${p.lng},${p.lat}`).join(';');
+  const url = `${OSRM}/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('Routing service is unavailable. Please try again in a minute.');
+  const data = await r.json();
+  if (data.code !== 'Ok') throw new Error(`Could not compute route: ${data.message || data.code}`);
+  return data.routes[0];
+}
+
+// Public Overpass mirrors — tried in order if one is slow
+const OVERPASS_MIRRORS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+
+async function fetchWithTimeout(url, timeoutMs, options = {}) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: ctrl.signal, ...options });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+// Search Foursquare Places API (new places-api.foursquare.com endpoint) for food near a lat/lng.
+async function foursquareSearch(lat, lng, radiusM) {
+  const params = new URLSearchParams({
+    ll: `${lat.toFixed(6)},${lng.toFixed(6)}`,
+    radius: String(Math.min(Math.round(radiusM), 100000)),
+    query: 'restaurant food cafe diner',
+    limit: '50',
+    sort: 'DISTANCE',
+  });
+  const r = await fetchWithTimeout(
+    `https://places-api.foursquare.com/places/search?${params}`,
+    8000,
+    {
+      headers: {
+        'Authorization': `Bearer ${FOURSQUARE_KEY}`,
+        'X-Places-Api-Version': '2025-06-17',
+        'Accept': 'application/json',
+      },
+    }
+  );
+  if (!r.ok) throw new Error(`Foursquare ${r.status}`);
+  const data = await r.json();
+  return data.results || [];
+}
+
+async function overpassQuery(query, timeoutMs = 25000) {
+  let lastErr;
+  for (const mirror of OVERPASS_MIRRORS) {
+    try {
+      // POST keeps the URL short (avoids CORS failures from overly long GET URLs)
+      // Content-Type: application/x-www-form-urlencoded is a CORS simple request — no preflight
+      const r = await fetchWithTimeout(mirror, timeoutMs, {
+        method: 'POST',
+        body: 'data=' + encodeURIComponent(query),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+      if (!r.ok) { lastErr = new Error(`HTTP ${r.status}`); continue; }
+      return await r.json();
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('All Overpass mirrors failed');
+}
+
+async function reverseGeocode(lat, lng) {
+  const url = `${NOMINATIM}/reverse?lat=${lat}&lon=${lng}&format=json&zoom=18`;
+  try {
+    const r = await fetch(url, {headers: {'Accept': 'application/json'}});
+    if (!r.ok) return null;
+    const data = await r.json();
+    const a = data.address || {};
+    const parts = [];
+    if (a.house_number && a.road) parts.push(`${a.house_number} ${a.road}`);
+    else if (a.road) parts.push(a.road);
+    const city = a.city || a.town || a.village || a.hamlet || a.suburb;
+    if (city) parts.push(city);
+    if (a.state) parts.push(a.state);
+    if (a.postcode) parts.push(a.postcode);
+    return parts.length ? parts.join(', ') : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function addressFromTags(tags) {
+  if (!tags) return null;
+  const parts = [];
+  if (tags['addr:housenumber'] && tags['addr:street']) {
+    parts.push(`${tags['addr:housenumber']} ${tags['addr:street']}`);
+  } else if (tags['addr:street']) {
+    parts.push(tags['addr:street']);
+  }
+  const city = tags['addr:city'] || tags['addr:town'] || tags['addr:village'];
+  if (city) parts.push(city);
+  if (tags['addr:state']) parts.push(tags['addr:state']);
+  if (tags['addr:postcode']) parts.push(tags['addr:postcode']);
+  return parts.length ? parts.join(', ') : null;
+}
+
+// Shared priority helpers used by both passes of findPOI
+const GAS_STATION_FOOD_KEYWORDS = [
+  "casey's","kum & go","circle k","sheetz","speedway","love's","pilot",
+  "flying j"," ta ","petro","kwik trip","kwik star","buc-ee's","maverick",
+  "holiday stationstores","holiday station","fas mart","7-eleven","ampm",
+];
+function isGasStationFood(tags) {
+  if (tags.shop === 'convenience') return true;
+  const h = ((tags.brand||'') + ' ' + (tags.name||'')).toLowerCase();
+  return GAS_STATION_FOOD_KEYWORDS.some(k => h.includes(k));
+}
+function mealPriority(el) {
+  const t = el.tags || {};
+  if (t.amenity === 'restaurant' && t.cuisine && !isGasStationFood(t)) return 0;
+  if (t.amenity === 'restaurant' && !isGasStationFood(t))               return 1;
+  if (t.amenity === 'fast_food'  && t.cuisine && !isGasStationFood(t))  return 2;
+  if ((t.amenity === 'fast_food' || t.amenity === 'cafe') && !isGasStationFood(t)) return 3;
+  if (isGasStationFood(t))                                               return 4;
+  return 5; // fuel station food in wide-fallback pass
+}
+const GAS_CHAINS = /shell|exxon|mobil|bp|chevron|marathon|citgo|sunoco|phillips\s*66|conoco|valero|casey|kwik\s*tr|kwik\s*st|speedway|circle\s*k|murphy|racetrac|wawa|sheetz|kum\s*&?\s*go|love'?s|pilot|flying\s*j|maverick|cenex|sinclair|arco|holiday|cumberland|meijer|costco|sam'?s|walmart/i;
+function gasPriority(el) {
+  const t = el.tags || {};
+  const n = (t.brand || t.name || t.operator || '');
+  if (GAS_CHAINS.test(n))    return 0;
+  if (t.brand || t.operator) return 1;
+  if (t.name)                return 2;
+  return 3;
+}
+function breakPriority(el) {
+  const t = el.tags || {};
+  if (t.highway === 'rest_area')              return 0;
+  if (t.amenity === 'fast_food' && t.brand)  return 1;
+  if (t.amenity === 'fuel')                  return 2;
+  if (t.amenity === 'fast_food')             return 3;
+  return 4;
+}
+
+async function findPOI(kind, route, distanceMeters) {
+  return _findPOIPass(kind, route, distanceMeters, true);
+}
+
+async function _findMealFoursquare(route, distanceMeters) {
+  const R = 20000; // 12-mile radius per search centre
+  // Two centres: at the scheduled stop, and 10 miles ahead
+  const offsets = [0, 16000];
+  const centres = offsets.map(o => {
+    const d = Math.max(0, Math.min(distanceMeters + o, route.distance));
+    const p = pointAtDistance(route.geometry, d);
+    return { lat: p[1], lng: p[0] };
+  });
+
+  // Sample points for off-route distance filtering
+  const samplePoints = centres.map(c => [c.lng, c.lat]);
+  function nearestDist(lng, lat) {
+    let min = Infinity;
+    for (const p of samplePoints) {
+      const d = haversine([p[0], p[1]], [lng, lat]);
+      if (d < min) min = d;
+    }
+    return min;
+  }
+
+  // Run both centre searches in parallel
+  const searchResults = await Promise.allSettled(
+    centres.map(c => foursquareSearch(c.lat, c.lng, R))
+  );
+
+  const seen = new Set();
+  const candidates = [];
+  for (const result of searchResults) {
+    if (result.status !== 'fulfilled') {
+      console.warn('Foursquare search error:', result.reason?.message);
+      continue;
+    }
+    for (const p of result.value) {
+      const id = p.fsq_place_id || p.fsq_id;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const lat = p.latitude ?? p.geocodes?.main?.latitude;
+      const lng = p.longitude ?? p.geocodes?.main?.longitude;
+      if (lat == null || lng == null) continue;
+      const dist = nearestDist(lng, lat);
+      if (dist > R) continue;
+      const catNames = (p.categories || []).map(c => c.name.toLowerCase()).join(' ');
+      if (/gas station|fuel|petroleum|convenience store/.test(catNames)) continue;
+      let priority = 2;
+      if (/fast food|burger|hot dog/.test(catNames)) priority = 3;
+      else if (/café|cafe|coffee/.test(catNames)) priority = 2;
+      else if (/restaurant|diner|bistro|grill|sushi|pizza|mexican|chinese|thai|indian/.test(catNames)) priority = 1;
+      const loc = p.location || {};
+      candidates.push({
+        priority, dist, lat, lng,
+        name: p.name || 'Restaurant',
+        brand: null,
+        type: p.categories?.[0]?.name || 'restaurant',
+        address: [loc.address, loc.locality || loc.city, loc.region || loc.state, loc.postcode].filter(Boolean).join(', ') || null,
+        distFromRoute: Math.round(dist),
+      });
+    }
+  }
+  candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+  return candidates.slice(0, 8);
+}
+
+async function _findPOIPass(kind, route, distanceMeters, wide) {
+  // Search radius per circle and how far ahead along the route to place circles.
+  // Meals use larger radii since restaurants can be several miles off the highway.
+  // We place circles at the stop point AND ahead so drivers can plan to stop at
+  // the next real option even if it's past the scheduled minute.
+  const R = wide
+    ? (kind === 'meal' ? 20000 : 12000)   // wide fallback: ~12 mi meals, ~7 mi gas/break
+    : (kind === 'meal' ? 14000 :  8000);  // primary: ~9 mi meals, ~5 mi gas/break
+
+  // Circle centres: stop point, +12 mi, +20 mi (and −8 mi for good measure)
+  const offsets = [-13000, 0, 19000, 32000];
+  const centres = offsets.map(o => {
+    const d = Math.max(0, Math.min(distanceMeters + o, route.distance));
+    const p = pointAtDistance(route.geometry, d);
+    return { lat: p[1], lng: p[0], d };
+  });
+
+  // Sample points (for post-query off-route distance check)
+  const samplePoints = centres.map(c => [c.lng, c.lat]);
+
+  function nearestRouteDist(lng, lat) {
+    let min = Infinity;
+    for (const p of samplePoints) {
+      const d = haversine([p[0], p[1]], [lng, lat]);
+      if (d < min) min = d;
+    }
+    return min;
+  }
+
+  // Build union of circular queries — one circle per centre point.
+  // This keeps result counts manageable in cities (no wide corridor).
+  function circles(tag) {
+    return centres.map(c => `nwr${tag}(around:${R},${c.lat.toFixed(5)},${c.lng.toFixed(5)});`).join('');
+  }
+
+  // ── Meal stops (Overpass fallback when Foursquare unavailable) ───────────
+  // Single large circle at the stop point — simpler and faster than 4×4 sub-queries.
+  if (kind === 'meal') {
+    const stopPt = pointAtDistance(route.geometry, distanceMeters);
+    const mR = 25000;
+    const mealFilters =
+      `nwr["amenity"~"^(restaurant|fast_food|cafe|pub)$"](around:${mR},${stopPt[1].toFixed(5)},${stopPt[0].toFixed(5)});`
+      + `nwr["highway"~"^(rest_area|services)$"](around:${mR},${stopPt[1].toFixed(5)},${stopPt[0].toFixed(5)});`
+      + `nwr["amenity"="rest_area"](around:${mR},${stopPt[1].toFixed(5)},${stopPt[0].toFixed(5)});`;
+    const mealQuery = `[out:json][timeout:20];(${mealFilters});out center tags 300;`;
+    let mealData;
+    try { mealData = await overpassQuery(mealQuery); }
+    catch (e) { console.warn('Overpass meal:', e.message); return []; }
+    if (!mealData.elements?.length) return [];
+
+    const restAreaCenters = [];
+    for (const el of mealData.elements) {
+      const t = el.tags || {};
+      if (t.highway === 'rest_area' || t.highway === 'services' || t.amenity === 'rest_area') {
+        const lt = el.lat ?? el.center?.lat, ln = el.lon ?? el.center?.lon;
+        if (lt != null) restAreaCenters.push([ln, lt]);
+      }
+    }
+    const REST_NAME2 = /rest\s*area|rest\s*stop|welcome\s*cent|travel\s*plaza|service\s*area|information\s*cent/i;
+    const mealAllowed = ['restaurant','fast_food','cafe','pub'];
+    const mSeen = new Set();
+    const mCandidates = [];
+    for (const el of mealData.elements) {
+      const elLat = el.lat ?? el.center?.lat;
+      const elLng = el.lon ?? el.center?.lon;
+      if (elLat == null || elLng == null) continue;
+      if (mSeen.has(el.id)) continue; mSeen.add(el.id);
+      const t = el.tags || {};
+      if (t.highway === 'rest_area' || t.highway === 'services' || t.amenity === 'rest_area') continue;
+      if (!t.amenity || !mealAllowed.includes(t.amenity)) continue;
+      const nm = ((t.name||'')+(t.brand||'')+(t.operator||'')).toLowerCase();
+      if (REST_NAME2.test(nm)) continue;
+      if (restAreaCenters.some(rc => haversine(rc, [elLng, elLat]) < 300)) continue;
+      const dist = haversine([stopPt[0], stopPt[1]], [elLng, elLat]);
+      if (dist > mR) continue;
+      mCandidates.push({ el, priority: mealPriority(el), dist, lat: elLat, lng: elLng });
+    }
+    if (!mCandidates.length) return [];
+    mCandidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+    return mCandidates.slice(0, 8).map(c => ({
+      name: c.el.tags?.name || c.el.tags?.brand || 'Restaurant',
+      brand: c.el.tags?.brand || null,
+      type: c.el.tags?.amenity || 'restaurant',
+      lat: c.lat, lng: c.lng,
+      address: addressFromTags(c.el.tags),
+      distFromRoute: Math.round(c.dist),
+    }));
+  }
+
+  // ── Gas and break stops: use Overpass (better coverage for fuel nodes) ────
+  const REST_TAG = `["highway"~"^(rest_area|services)$"]`;
+  const RA_TAG   = `["amenity"="rest_area"]`;
+
+  let unionFilters;
+  if (kind === 'gas') {
+    unionFilters = circles(`["amenity"="fuel"]`);
+  } else if (kind === 'break') {
+    unionFilters = circles(`["highway"="rest_area"]`)
+      + circles(`["amenity"~"^(fast_food|cafe)$"]`)
+      + circles(`["amenity"="fuel"]`)
+      + circles(`["amenity"="restaurant"]`);
+  } else {
+    return [];
+  }
+
+  const query = `[out:json][timeout:20];(${unionFilters});out center tags 500;`;
+  let data;
+  try { data = await overpassQuery(query); }
+  catch (e) { console.warn('Overpass:', e.message); return []; }
+  if (!data.elements?.length) return [];
+
+  const REST_NAME = /rest\s*area|rest\s*stop|welcome\s*cent|travel\s*plaza|service\s*area|information\s*cent/i;
+
+  const seen = new Set();
+  const candidates = [];
+  for (const el of data.elements) {
+    const elLat = el.lat ?? el.center?.lat;
+    const elLng = el.lon ?? el.center?.lon;
+    if (elLat == null || elLng == null) continue;
+    if (seen.has(el.id)) continue;
+    seen.add(el.id);
+    const t = el.tags || {};
+
+    if (kind === 'gas') {
+      if (t.highway === 'rest_area' || t.amenity === 'rest_area') continue;
+      const nm = ((t.name||'')+(t.brand||'')+(t.operator||'')).toLowerCase();
+      if (REST_NAME.test(nm) || /state\s*park|national\s*park/.test(nm)) continue;
+    }
+
+    if (kind === 'break') {
+      const nm = ((t.brand||'')+(t.name||'')).toLowerCase();
+      if (nm.includes('subway')) continue;
+    }
+
+    const dist = nearestRouteDist(elLng, elLat);
+    if (dist > R) continue;
+
+    const priority = kind === 'gas'   ? gasPriority(el)
+                   : kind === 'break' ? breakPriority(el)
+                   : 0;
+    candidates.push({ el, priority, dist, lat: elLat, lng: elLng });
+  }
+  if (!candidates.length) return [];
+
+  candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+
+  return candidates.slice(0, 8).map(c => {
+    const typeLabel = c.el.tags?.highway === 'rest_area' ? 'rest area'
+                    : (c.el.tags?.amenity || kind);
+    return {
+      name: c.el.tags?.name || c.el.tags?.brand || 'Stop',
+      brand: c.el.tags?.brand || null,
+      type: typeLabel,
+      lat: c.lat, lng: c.lng,
+      address: addressFromTags(c.el.tags),
+      distFromRoute: Math.round(c.dist),
+    };
+  });
+}
+
+// ── Schedule computation ───────────────────────────────────────────────────
+function computeSchedule(opts) {
+  const {
+    totalDriveSeconds, totalDistanceMeters,
+    departureDate,
+    breakFreqHours, gasFreqHours, maxPerDayHours,
+    includeBreakfast, breakfastTime,
+    includeLunch, lunchTime,
+    includeDinner, dinnerTime,
+    nextDayDepart,
+    noMealsLastHours = 0,
+    startName, endName,
+    waypointStops = [],
+  } = opts;
+  const noMealsLastSec = noMealsLastHours * 3600;
+  const sortedWaypoints = [...waypointStops].sort((a, b) => a.distanceMeters - b.distanceMeters);
+  let nextWpIdx = 0;
+
+  const events = [];
+  let currentTime = new Date(departureDate);
+  let driveSecondsDone = 0;
+  let dailyDriveSeconds = 0;
+  let lastBreakSec = 0;
+  let lastGasSec = 0;
+  let day = 1;
+  // Mark meals as already taken if departure is more than 30 min past their scheduled time
+  function parseMealMin(t) { const [h,m] = t.split(':').map(Number); return h*60+m; }
+  const departMin = departureDate.getHours()*60 + departureDate.getMinutes();
+  const mealsTaken = {
+    breakfast: departMin > parseMealMin(breakfastTime) + 30,
+    lunch:     departMin > parseMealMin(lunchTime) + 30,
+    dinner:    departMin > parseMealMin(dinnerTime) + 30,
+  };
+
+  events.push({
+    time: new Date(currentTime),
+    type: 'departure',
+    label: `Depart from ${startName}`,
+    duration: 0,
+    driveSeconds: 0,
+    distanceMeters: 0,
+    day,
+  });
+
+  const stepSec = 15 * 60; // 15-minute simulation steps
+  const safety = 2000;
+  let iter = 0;
+
+  while (driveSecondsDone < totalDriveSeconds - 1 && iter < safety) {
+    iter++;
+    const remaining = totalDriveSeconds - driveSecondsDone;
+    const step = Math.min(stepSec, remaining);
+    currentTime = addMinutes(currentTime, step / 60);
+    driveSecondsDone += step;
+    dailyDriveSeconds += step;
+    const distanceMeters = (driveSecondsDone / totalDriveSeconds) * totalDistanceMeters;
+
+    // Planned stop check — insert known stops as the route reaches them
+    let hitPlannedStop = false;
+    while (nextWpIdx < sortedWaypoints.length &&
+           distanceMeters >= sortedWaypoints[nextWpIdx].distanceMeters) {
+      const wp = sortedWaypoints[nextWpIdx];
+      events.push({
+        time: new Date(currentTime),
+        type: 'planned',
+        label: `${wp.name} (${wp.duration} min)`,
+        duration: wp.duration,
+        driveSeconds: driveSecondsDone,
+        distanceMeters: wp.distanceMeters,
+        day,
+        poi: {name: wp.name, address: wp.typedAddress, lat: wp.lat, lng: wp.lng},
+      });
+      currentTime = addMinutes(currentTime, wp.duration);
+      lastBreakSec = driveSecondsDone;
+      lastGasSec = driveSecondsDone;
+      nextWpIdx++;
+      hitPlannedStop = true;
+    }
+    if (hitPlannedStop) continue;
+
+    // End of day check — don't stop for the night if less than 20% of a full day's drive remains;
+    // pushing slightly past the limit beats adding an entire extra calendar day.
+    if (dailyDriveSeconds >= maxPerDayHours * 3600 &&
+        driveSecondsDone < totalDriveSeconds - maxPerDayHours * 3600 * 0.15) {
+      events.push({
+        time: new Date(currentTime),
+        type: 'overnight',
+        label: `Lodging — End of Day ${day}`,
+        duration: null,
+        driveSeconds: driveSecondsDone,
+        distanceMeters,
+        day,
+      });
+      const [nh, nm] = nextDayDepart.split(':').map(Number);
+      const next = new Date(
+        currentTime.getFullYear(),
+        currentTime.getMonth(),
+        currentTime.getDate() + 1,
+        nh, nm, 0, 0
+      );
+      currentTime = next;
+      day++;
+      dailyDriveSeconds = 0;
+      lastBreakSec = driveSecondsDone;
+      lastGasSec = driveSecondsDone;
+      const resumeMin = next.getHours()*60 + next.getMinutes();
+      mealsTaken.breakfast = resumeMin > parseMealMin(breakfastTime) + 30;
+      mealsTaken.lunch     = resumeMin > parseMealMin(lunchTime) + 30;
+      mealsTaken.dinner    = resumeMin > parseMealMin(dinnerTime) + 30;
+      events.push({
+        time: new Date(currentTime),
+        type: 'departure',
+        label: `Resume — Day ${day}`,
+        duration: 0,
+        driveSeconds: driveSecondsDone,
+        distanceMeters,
+        day,
+      });
+      continue;
+    }
+
+    // Meal check — skip entirely if within the "no meals near destination" window
+    const clockMin = currentTime.getHours() * 60 + currentTime.getMinutes();
+    const meals = [
+      {key:'breakfast', include:includeBreakfast, time:breakfastTime, label:'Breakfast'},
+      {key:'lunch',     include:includeLunch,     time:lunchTime,     label:'Lunch'},
+      {key:'dinner',    include:includeDinner,    time:dinnerTime,    label:'Dinner'},
+    ];
+    let mealTaken = false;
+    for (const meal of meals) {
+      if (!meal.include || mealsTaken[meal.key]) continue;
+      if (noMealsLastSec > 0 && remaining <= noMealsLastSec) { mealsTaken[meal.key] = true; continue; }
+      const [mh, mm] = meal.time.split(':').map(Number);
+      const mealMin = mh * 60 + mm;
+      if (clockMin >= mealMin - 15 && clockMin <= mealMin + 90) {
+        events.push({
+          time: new Date(currentTime),
+          type: 'meal',
+          label: `${meal.label} (1 hr)`,
+          duration: 60,
+          driveSeconds: driveSecondsDone,
+          distanceMeters,
+          day,
+        });
+        currentTime = addMinutes(currentTime, 60);
+        mealsTaken[meal.key] = true;
+        lastBreakSec = driveSecondsDone;
+        lastGasSec = driveSecondsDone;
+        mealTaken = true;
+        break;
+      }
+    }
+    if (mealTaken) continue;
+
+    // Gas check (±15 min window)
+    if ((driveSecondsDone - lastGasSec) >= gasFreqHours * 3600 - 900
+        && driveSecondsDone < totalDriveSeconds - 1800) {
+      events.push({
+        time: new Date(currentTime),
+        type: 'gas',
+        label: 'Gas stop (15 min)',
+        duration: 15,
+        driveSeconds: driveSecondsDone,
+        distanceMeters,
+        day,
+      });
+      currentTime = addMinutes(currentTime, 15);
+      lastGasSec = driveSecondsDone;
+      lastBreakSec = driveSecondsDone;
+      continue;
+    }
+
+    // Break check (±15 min window)
+    if ((driveSecondsDone - lastBreakSec) >= breakFreqHours * 3600 - 900
+        && driveSecondsDone < totalDriveSeconds - 1800) {
+      events.push({
+        time: new Date(currentTime),
+        type: 'break',
+        label: 'Quick break — restroom (10 min)',
+        duration: 10,
+        driveSeconds: driveSecondsDone,
+        distanceMeters,
+        day,
+      });
+      currentTime = addMinutes(currentTime, 5);
+      lastBreakSec = driveSecondsDone;
+      continue;
+    }
+  }
+
+  events.push({
+    time: new Date(currentTime),
+    type: 'arrival',
+    label: `Arrive in ${endName}`,
+    duration: 0,
+    driveSeconds: totalDriveSeconds,
+    distanceMeters: totalDistanceMeters,
+    day,
+  });
+
+  return events;
+}
+
+// ── POI candidate swap ─────────────────────────────────────────────────────
+let currentEvents = [];
+
+function toggleAlts(eventId) {
+  const panel = document.getElementById(`poi-alts-${eventId}`);
+  if (panel) panel.classList.toggle('hidden');
+}
+
+function selectPOI(eventId, candidateIdx) {
+  const e = currentEvents[eventId];
+  if (!e || !e.poiCandidates) return;
+  e.poi = e.poiCandidates[candidateIdx];
+  e._selectedCandidate = candidateIdx;
+  const cell = document.getElementById(`poi-cell-${eventId}`);
+  if (cell) cell.innerHTML = poiHtml(e);
+}
+
+// ── Main entry ─────────────────────────────────────────────────────────────
+async function generatePlan() {
+  const start = document.getElementById('startPlace').value.trim();
+  const end   = document.getElementById('endPlace').value.trim();
+  if (!start || !end) {
+    showStatus('Please enter both a starting point and an ending point.', 'error');
+    return;
+  }
+  const dateStr = document.getElementById('departDate').value;
+  const timeStr = document.getElementById('departTime').value;
+  if (!dateStr || !timeStr) {
+    showStatus('Please enter a departure date and time.', 'error');
+    return;
+  }
+  const breakFreq = parseFloat(document.getElementById('breakFreq').value) || 2;
+  const gasFreq   = parseFloat(document.getElementById('gasFreq').value)   || 4;
+  const maxPerDay = parseFloat(document.getElementById('maxPerDay').value)  || 10;
+
+  const opts = {
+    departureDate: new Date(`${dateStr}T${timeStr}`),
+    breakFreqHours: breakFreq,
+    gasFreqHours:   gasFreq,
+    maxPerDayHours: maxPerDay,
+    includeBreakfast: document.getElementById('includeBreakfast').checked,
+    breakfastTime:    document.getElementById('breakfastTime').value,
+    includeLunch:     document.getElementById('includeLunch').checked,
+    lunchTime:        document.getElementById('lunchTime').value,
+    includeDinner:    document.getElementById('includeDinner').checked,
+    dinnerTime:       document.getElementById('dinnerTime').value,
+    nextDayDepart:       document.getElementById('nextDayDepart').value,
+    noMealsLastHours:    parseFloat(document.getElementById('noMealsLastHours').value) || 0,
+    startName: start,
+    endName: end,
+  };
+
+  setBusy(true);
+  try {
+    // Step 1: Geocode
+    showStatus(`Looking up "${start}"…`);
+    const startCoord = await geocode(start);
+
+    const detourValues = detours.map(d => d.trim()).filter(Boolean);
+    const detourCoords = [];
+    for (const d of detourValues) {
+      await sleep(1100); // Nominatim policy: 1 req/sec
+      showStatus(`Looking up "${d}"…`);
+      detourCoords.push(await geocode(d));
+    }
+
+    // Geocode planned stops
+    const validPlannedStops = plannedStops.filter(ps => ps.address.trim());
+    const plannedStopCoords = [];
+    for (const ps of validPlannedStops) {
+      await sleep(1100);
+      showStatus(`Looking up "${ps.name || ps.address}"…`);
+      const coord = await geocode(ps.address);
+      plannedStopCoords.push({
+        ...coord,
+        stopName: ps.name || ps.address,
+        duration: parseInt(ps.duration) || 20,
+        typedAddress: ps.address,
+      });
+    }
+
+    await sleep(1100);
+    showStatus(`Looking up "${end}"…`);
+    const endCoord = await geocode(end);
+
+    // Step 2: Route (planned stops are waypoints so OSRM routes through them)
+    showStatus('Computing the best route…');
+    const route = await getRoute([startCoord, ...detourCoords, ...plannedStopCoords, endCoord]);
+
+    // Compute cumulative distance/duration to each planned stop from OSRM legs
+    const legs = route.legs || [];
+    let cumDist = 0, cumDur = 0;
+    const legCumulatives = legs.map(leg => {
+      cumDist += leg.distance;
+      cumDur += leg.duration;
+      return {cumDist, cumDur};
+    });
+    const waypointStops = plannedStopCoords.map((psc, k) => {
+      const legIdx = detourCoords.length + k;
+      const cum = legCumulatives[legIdx] || {cumDist: 0, cumDur: 0};
+      return {
+        name: psc.stopName,
+        typedAddress: psc.typedAddress,
+        lat: psc.lat,
+        lng: psc.lng,
+        duration: psc.duration,
+        distanceMeters: cum.cumDist,
+        driveSeconds: cum.cumDur,
+      };
+    });
+
+    // Step 3: Schedule
+    const events = computeSchedule({
+      ...opts,
+      totalDriveSeconds: route.duration,
+      totalDistanceMeters: route.distance,
+      waypointStops,
+    });
+
+    // Step 4: Find places at each stop — all in parallel
+    const stopEvents = events.filter(e => ['break','gas','meal'].includes(e.type));
+    stopEvents.forEach(e => {
+      const point = pointAtDistance(route.geometry, e.distanceMeters);
+      e.lng = point[0]; e.lat = point[1];
+    });
+    showStatus(`Finding ${stopEvents.length} stops along your route…`);
+    const pois = await Promise.all(
+      stopEvents.map(e => findPOI(e.type, route, e.distanceMeters).catch(() => []))
+    );
+    stopEvents.forEach((e, i) => {
+      e.poiCandidates = pois[i] || [];
+      e.poi = e.poiCandidates[0] || null;
+      e._selectedCandidate = 0;
+    });
+
+    // Step 5a: Fill in missing addresses via reverse geocoding (staggered parallel)
+    const needAddr = stopEvents.filter(e => e.poi && !e.poi.address);
+    if (needAddr.length) {
+      showStatus(`Looking up addresses for ${needAddr.length} stop${needAddr.length !== 1 ? 's' : ''}…`);
+      await Promise.all(needAddr.map((e, i) =>
+        sleep(i * 1100).then(() => reverseGeocode(e.poi.lat, e.poi.lng))
+          .then(addr => { if (addr) e.poi.address = addr; })
+          .catch(() => {})
+      ));
+    }
+
+    // Step 5c: Reverse-geocode overnight stops (staggered parallel)
+    const overnights = events.filter(e => e.type === 'overnight');
+    overnights.forEach((e) => {
+      const pt = pointAtDistance(route.geometry, e.distanceMeters);
+      e.lat = pt[1]; e.lng = pt[0];
+    });
+    const offsetBase = needAddr.length;
+    await Promise.all(overnights.map((e, i) =>
+      sleep((offsetBase + i) * 1100).then(() => reverseGeocode(e.lat, e.lng))
+        .then(addr => {
+          if (addr) {
+            const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+            const cityState = parts.length >= 3 ? parts.slice(-4, -2).join(', ') : addr;
+            e.cityName = cityState;
+            e.label = `Lodging — End of Day ${e.day} (near ${cityState})`;
+          }
+        })
+        .catch(() => {})
+    ));
+
+    // Render
+    clearStatus();
+    renderSchedule(events, {
+      start, end,
+      startDisplay: startCoord.display,
+      endDisplay: endCoord.display,
+      totalDriveSeconds: route.duration,
+      totalDistanceMiles: Math.round(route.distance / 1609.344),
+      days: events[events.length - 1].day,
+      detours: detourValues.map((typed, i) => ({
+        typed,
+        display: detourCoords[i].display,
+      })),
+    });
+    renderMap(events, route, startCoord, endCoord);
+    buildMapsLink(start, end, detourValues, validPlannedStops.map(ps => ps.address));
+    document.getElementById('output').classList.remove('hidden');
+    document.getElementById('output').scrollIntoView({behavior: 'smooth'});
+  } catch (e) {
+    showStatus(e.message, 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
+// ── Rendering ──────────────────────────────────────────────────────────────
+function iconFor(type) {
+  switch (type) {
+    case 'departure': return '🏁';
+    case 'arrival':   return '🎉';
+    case 'overnight': return '🛏';
+    case 'meal':      return '🍽';
+    case 'gas':       return '⛽';
+    case 'break':     return '🚻';
+    case 'planned':   return '📍';
+    default:          return '•';
+  }
+}
+function poiHtml(e) {
+  if (e.type === 'departure' || e.type === 'arrival' || e.type === 'overnight') {
+    if (e.type === 'overnight') {
+      const loc = e.cityName || (e.lat ? `${e.lat.toFixed(4)},${e.lng.toFixed(4)}` : '');
+      const hiltonQ   = encodeURIComponent(`Hilton hotels ${loc}`);
+      const marriottQ = encodeURIComponent(`Marriott hotels ${loc}`);
+      const allQ      = encodeURIComponent(`hotels ${loc}`);
+      const searchLinks = `<span class="place-meta" style="margin-top:4px;display:block">
+        <a href="https://www.google.com/maps/search/${hiltonQ}" target="_blank">Search Hilton</a>
+        &nbsp;·&nbsp;
+        <a href="https://www.google.com/maps/search/${marriottQ}" target="_blank">Search Marriott</a>
+        &nbsp;·&nbsp;
+        <a href="https://www.google.com/maps/search/${allQ}" target="_blank">All hotels</a>
+      </span>`;
+      if (e.poi) {
+        const mapsQuery = encodeURIComponent(`${e.poi.name} ${e.poi.lat},${e.poi.lng}`);
+        const brandNote = e.poi.brand && e.poi.brand !== e.poi.name ? ` (${e.poi.brand})` : '';
+        const distMi = (e.poi.distFromRoute / 1609.344).toFixed(1);
+        return `<span class="stop-place"><b>${e.poi.name}</b>${brandNote}
+          ${e.poi.address ? `<span class="place-meta">${e.poi.address}</span>` : ''}
+          <span class="place-meta">${e.poi.type} · ~${distMi} mi off route</span>
+          <a href="https://www.google.com/maps/search/${mapsQuery}" target="_blank">Open in Maps</a>
+          ${searchLinks}</span>`;
+      }
+      return `<span class="stop-place">${searchLinks}</span>`;
+    }
+    return '';
+  }
+  if (e.type === 'planned' && e.poi) {
+    const mapsQuery = encodeURIComponent(`${e.poi.name} ${e.poi.lat},${e.poi.lng}`);
+    return `<span class="stop-place"><b>${e.poi.name}</b>
+      ${e.poi.address ? `<span class="place-meta">${e.poi.address}</span>` : ''}
+      <a href="https://www.google.com/maps/search/${mapsQuery}" target="_blank">Open in Maps</a></span>`;
+  }
+
+  const candidates = e.poiCandidates || [];
+  const selectedIdx = e._selectedCandidate ?? 0;
+
+  // For meal stops, always build a Google Maps restaurant search link at the stop location.
+  // Many restaurants aren't in the map database used for suggestions, so this ensures
+  // the driver can always find real options (including places like Globe Indian Cuisine).
+  let gmapsSearchLink = '';
+  if (e.type === 'meal' && e.lat && e.lng) {
+    const gq = encodeURIComponent(`restaurants near ${e.lat.toFixed(4)},${e.lng.toFixed(4)}`);
+    gmapsSearchLink = `<span class="place-meta" style="margin-top:3px;display:block">
+      <a href="https://www.google.com/maps/search/${gq}" target="_blank">🔍 Find restaurants on Google Maps</a>
+    </span>`;
+  }
+
+  if (e.poi) {
+    const mapsQuery = encodeURIComponent(`${e.poi.name} ${e.poi.lat},${e.poi.lng}`);
+    const othersCount = candidates.length - 1;
+    const altPanel = othersCount > 0 ? `
+      <span class="poi-alts">
+        <button class="poi-alts-toggle" onclick="toggleAlts(${e._id})">↕ ${othersCount} other option${othersCount !== 1 ? 's' : ''}</button>
+        <div id="poi-alts-${e._id}" class="poi-alt-list hidden">
+          ${candidates.map((c, i) => {
+            const cq = encodeURIComponent(`${c.name} ${c.lat},${c.lng}`);
+            const label = `${c.name}${c.brand && c.brand !== c.name ? ` (${c.brand})` : ''} · ${(c.distFromRoute/1609.344).toFixed(1)} mi off`;
+            return `<div class="poi-alt-item${i === selectedIdx ? ' selected' : ''}" onclick="selectPOI(${e._id}, ${i})">
+              <span class="poi-alt-name">${label}</span>
+              <a href="https://www.google.com/maps/search/${cq}" target="_blank" onclick="event.stopPropagation()">Maps</a>
+            </div>`;
+          }).join('')}
+        </div>
+      </span>` : '';
+    return `<span class="stop-place"><b>${e.poi.name}</b>${e.poi.brand && e.poi.brand !== e.poi.name ? ` (${e.poi.brand})` : ''}
+      ${e.poi.address ? `<span class="place-meta">${e.poi.address}</span>` : ''}
+      <span class="place-meta">${e.poi.type.replace('_', ' ')} · ~${(e.poi.distFromRoute/1609.344).toFixed(1)} mi off route</span>
+      <a href="https://www.google.com/maps/search/${mapsQuery}" target="_blank">Open in Maps</a>
+      ${altPanel}${gmapsSearchLink}</span>`;
+  }
+  // No OSM result — show Google Maps search as the primary action
+  if (e.lat && e.lng) {
+    const term = e.type === 'gas' ? 'gas+station' : e.type === 'meal' ? 'restaurants' : 'fast+food';
+    const q = encodeURIComponent(`${term} near ${e.lat.toFixed(4)},${e.lng.toFixed(4)}`);
+    return `<span class="stop-place">
+      <a href="https://www.google.com/maps/search/${q}" target="_blank" style="font-weight:bold">🔍 Find ${e.type === 'gas' ? 'gas stations' : e.type === 'meal' ? 'restaurants' : 'rest stops'} on Google Maps</a>
+    </span>`;
+  }
+  return '<span class="stop-place place-tbd">—</span>';
+}
+
+function renderSchedule(events, info) {
+  events.forEach((e, i) => { e._id = i; });
+  currentEvents = events;
+  const container = document.getElementById('scheduleContent');
+
+  const totalStopMinutes = events.reduce((sum, e) => sum + (e.duration || 0), 0);
+  const driveHours = (info.totalDriveSeconds / 3600);
+  const totalStopHours = (totalStopMinutes / 60).toFixed(1);
+  const totalTripHours = (driveHours + totalStopMinutes / 60).toFixed(1);
+  const driveHoursStr = driveHours.toFixed(1);
+
+  const departDate = events[0].time;
+  const arriveDate = events[events.length - 1].time;
+
+  const byDay = {};
+  events.forEach(e => {
+    if (!byDay[e.day]) byDay[e.day] = [];
+    byDay[e.day].push(e);
+  });
+
+  let html = `
+    <h2>Trip Plan: ${info.start} → ${info.end}</h2>
+    <div class="trip-summary">
+      <p>
+        <b>From:</b> ${info.startDisplay || info.start}<br>
+        <b>To:</b> ${info.endDisplay || info.end}<br>
+        <b>Departing:</b> ${formatDate(departDate)} at ${formatTime(departDate)}<br>
+        <b>Arriving:</b> ${formatDate(arriveDate)} at ${formatTime(arriveDate)}<br>
+        <b>Total drive time:</b> ${driveHoursStr} hours
+        &nbsp;·&nbsp; <b>Total stops:</b> ${totalStopHours} hours
+        &nbsp;·&nbsp; <b>Total trip:</b> ${totalTripHours} hours<br>
+        <b>Distance:</b> ${info.totalDistanceMiles} miles
+        ${info.days > 1 ? `&nbsp;·&nbsp; <b>Days:</b> ${info.days}` : ''}
+        ${info.detours.length ? `<br><b>Detours:</b><br>` + info.detours.map(d =>
+          `&nbsp;&nbsp;• <b>${d.typed}</b> <span style="color:#666;font-size:12px">→ matched to: ${d.display}</span>`
+        ).join('<br>') : ''}
+      </p>
+    </div>
+  `;
+
+  Object.keys(byDay).forEach(d => {
+    const dayEvents = byDay[d];
+    if (info.days > 1) {
+      html += `<div class="day-header">Day ${d} — ${formatDate(dayEvents[0].time)}</div>`;
+    }
+    html += `
+      <table class="schedule-table">
+        <thead>
+          <tr>
+            <th style="width:90px">ETA</th>
+            <th style="width:90px">Depart</th>
+            <th style="width:80px">Mile</th>
+            <th>Stop</th>
+            <th>Where</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+    dayEvents.forEach((e) => {
+      const cls = `stop-${e.type}`;
+      const mile = e.distanceMeters != null
+        ? Math.round(e.distanceMeters / 1609.344)
+        : '';
+      const depart = e.duration > 0 ? formatTime(addMinutes(e.time, e.duration)) : '';
+      html += `
+        <tr class="${cls}">
+          <td>${formatTime(e.time)}</td>
+          <td>${depart}</td>
+          <td>${mile === '' ? '' : '~' + mile}</td>
+          <td><span class="stop-icon">${iconFor(e.type)}</span>${e.label}</td>
+          <td id="poi-cell-${e._id}">${poiHtml(e)}</td>
+        </tr>
+      `;
+    });
+    html += `</tbody></table>`;
+  });
+
+  html += `
+    <p style="font-size:12px;color:#666;margin-top:14px;font-style:italic">
+      Stop locations are pulled from OpenStreetMap and chosen as the closest match to your route at each scheduled stop time. Distances and times come from OSRM driving directions.
+    </p>
+  `;
+
+  container.innerHTML = html;
+}
+
+async function findLodging(lat, lng) {
+  const SEARCH_RADIUS_M = 25000; // ~15 miles
+  const query = `[out:json][timeout:12];(
+    nwr["tourism"="hotel"](around:${SEARCH_RADIUS_M},${lat},${lng});
+    nwr["tourism"="motel"](around:${SEARCH_RADIUS_M},${lat},${lng});
+    nwr["tourism"="guest_house"](around:${SEARCH_RADIUS_M},${lat},${lng});
+    nwr["amenity"="hotel"](around:${SEARCH_RADIUS_M},${lat},${lng});
+  );out center tags 100;`;
+  let data;
+  try { data = await overpassQuery(query, 10000); } catch (e) { return null; }
+  if (!data.elements || !data.elements.length) return null;
+
+  const HILTON   = /hilton|hampton\s*inn|doubletree|embassy\s*suites|hilton\s*garden|homewood\s*suites|home2|curio|waldorf|tapestry|tru\s*by\s*hilton|canopy/i;
+  const MARRIOTT = /marriott|courtyard|residence\s*inn|fairfield|springhill|towneplace|aloft|ac\s*hotel|westin|sheraton|four\s*points|delta\s*hotel|autograph|m.ridien|moxy|st\.?\s*regis|ritz.?carlton|w\s*hotel/i;
+
+  function lodgingPriority(el) {
+    const name = (el.tags?.brand || el.tags?.name || '');
+    if (HILTON.test(name))   return 0;
+    if (MARRIOTT.test(name)) return 1;
+    if (el.tags?.tourism === 'hotel') return 2;
+    return 3; // motel or other
+  }
+
+  const candidates = data.elements.map(el => {
+    const elLat = el.lat ?? el.center?.lat;
+    const elLng = el.lon ?? el.center?.lon;
+    if (elLat == null || elLng == null) return null;
+    return { el, lat: elLat, lng: elLng,
+      dist: haversine([lng, lat], [elLng, elLat]),
+      priority: lodgingPriority(el) };
+  }).filter(Boolean);
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => a.priority - b.priority || a.dist - b.dist);
+  const best = candidates[0];
+  return {
+    name: best.el.tags?.name || best.el.tags?.brand || 'Hotel',
+    brand: best.el.tags?.brand || null,
+    type: best.el.tags?.tourism || 'hotel',
+    lat: best.lat, lng: best.lng,
+    address: addressFromTags(best.el.tags),
+    distFromRoute: Math.round(best.dist),
+  };
+}
+
+function renderMap(events, route, startCoord, endCoord) {
+  const mapDiv = document.getElementById('tripMap');
+  if (!mapDiv) return;
+  if (window._tripMap) { window._tripMap.remove(); window._tripMap = null; }
+
+  const map = L.map('tripMap');
+  window._tripMap = map;
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 18,
+  }).addTo(map);
+
+  const routeCoords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+  const line = L.polyline(routeCoords, {color: '#2C5F7C', weight: 4, opacity: 0.75}).addTo(map);
+
+  const markerStyle = {
+    departure: {color:'#1F4659', fillColor:'#2C5F7C', radius:10},
+    arrival:   {color:'#1F4659', fillColor:'#2C5F7C', radius:10},
+    overnight: {color:'#5D3A1A', fillColor:'#8B5E3C', radius:9},
+    meal:      {color:'#3A6E3B', fillColor:'#5A8A5C', radius:8},
+    gas:       {color:'#4F5C60', fillColor:'#6B7B7F', radius:8},
+    break:     {color:'#8B6D1A', fillColor:'#C0962B', radius:7},
+    planned:   {color:'#6B3A8C', fillColor:'#9B59B6', radius:9},
+  };
+
+  events.forEach(e => {
+    let lat, lng;
+    if (e.type === 'departure') { lat = startCoord.lat; lng = startCoord.lng; }
+    else if (e.type === 'arrival') { lat = endCoord.lat; lng = endCoord.lng; }
+    else if (e.type === 'overnight' && e.poi) { lat = e.poi.lat; lng = e.poi.lng; }
+    else if (e.lat != null && e.lng != null) { lat = e.lat; lng = e.lng; }
+    else if (e.poi) { lat = e.poi.lat; lng = e.poi.lng; }
+    else return;
+
+    const style = markerStyle[e.type] || {color:'#666', fillColor:'#999', radius:7};
+    const marker = L.circleMarker([lat, lng], {
+      ...style, fillOpacity: 0.9, weight: 2,
+    }).addTo(map);
+
+    const poiName = e.poi && e.poi.name ? `<br><span style="color:#555;font-size:11px">${e.poi.name}</span>` : '';
+    marker.bindPopup(
+      `<b>${iconFor(e.type)} ${e.label}</b><br>${formatTime(e.time)}${poiName}`,
+      {maxWidth: 240}
+    );
+  });
+
+  map.fitBounds(line.getBounds(), {padding: [20, 20]});
+}
+
+function savePDF() {
+  const hint = document.getElementById('pdfHint');
+  hint.classList.remove('hidden');
+  window.print();
+  setTimeout(() => hint.classList.add('hidden'), 8000);
+}
+
+function buildMapsLink(start, end, detourList, plannedAddresses = []) {
+  const waypoints = [start, ...detourList, ...plannedAddresses, end].map(encodeURIComponent);
+  const url = `https://www.google.com/maps/dir/${waypoints.join('/')}`;
+  document.getElementById('mapsBtn').href = url;
+}
+</script>
+</body>
+</html>
