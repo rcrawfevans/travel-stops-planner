@@ -1194,9 +1194,9 @@ async function generatePlan() {
         display: detourCoords[i].display,
       })),
     });
-    renderMap(events, route, startCoord, endCoord);
     buildMapsLink(start, end, detourValues, validPlannedStops.map(ps => ps.address));
     document.getElementById('output').classList.remove('hidden');
+    renderMap(events, route, startCoord, endCoord);
     document.getElementById('output').scrollIntoView({behavior: 'smooth'});
   } catch (e) {
     showStatus(e.message, 'error');
@@ -1435,6 +1435,7 @@ function renderMap(events, route, startCoord, endCoord) {
     );
   });
 
+  map.invalidateSize();
   map.fitBounds(line.getBounds(), {padding: [20, 20]});
 }
 
